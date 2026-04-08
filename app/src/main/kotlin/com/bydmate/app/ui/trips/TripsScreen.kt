@@ -443,15 +443,6 @@ private fun BarChart(
 ) {
     val density = androidx.compose.ui.platform.LocalDensity.current.density
 
-    val labelPaint = remember {
-        AndroidPaint().apply {
-            color = 0xFF64748B.toInt()
-            textSize = 28f
-            textAlign = AndroidPaint.Align.CENTER
-            isAntiAlias = true
-            typeface = android.graphics.Typeface.MONOSPACE
-        }
-    }
     val yLabelPaint = remember {
         AndroidPaint().apply {
             color = 0xFF64748B.toInt()
@@ -497,10 +488,6 @@ private fun BarChart(
         val maxValue = bars.maxOfOrNull { it.value } ?: 1.0
         niceAxisMax(maxValue)
     }
-    val showEveryNth = remember(bars) {
-        if (bars.size > 15) (bars.size / 7).coerceAtLeast(2) else 1
-    }
-
     Box(modifier = modifier) {
         Canvas(
             modifier = Modifier
@@ -523,7 +510,7 @@ private fun BarChart(
         ) {
             val d = density
             val yAxisWidth = 48f * d
-            val bottomPadding = 32f * d
+            val bottomPadding = 8f * d
             val topPadding = 52f * d
             val chartLeft = yAxisWidth
             val chartWidth = size.width - chartLeft
@@ -573,15 +560,6 @@ private fun BarChart(
                     cornerRadius = CornerRadius(3f * d, 3f * d)
                 )
 
-                // X axis label
-                if (i % showEveryNth == 0 || i == bars.size - 1) {
-                    drawContext.canvas.nativeCanvas.drawText(
-                        bar.label,
-                        chartLeft + i * barTotalWidth + barTotalWidth / 2f,
-                        size.height - 4f * d,
-                        labelPaint
-                    )
-                }
             }
 
             // Tooltip
@@ -596,9 +574,9 @@ private fun BarChart(
                     ChartMetric.KWH -> "%.1f кВтч".format(bar.value)
                     ChartMetric.COST -> "%.2f $currencySymbol".format(bar.value)
                 }
-                val countText = "${bar.tripCount} поезд."
+                val countText = "${bar.label} · ${bar.tripCount} поезд."
 
-                val tooltipW = 130f * d
+                val tooltipW = 150f * d
                 val tooltipH = 48f * d
                 val tooltipX = (barCenterX - tooltipW / 2f)
                     .coerceIn(chartLeft, size.width - tooltipW)
