@@ -59,7 +59,7 @@ data class TripsUiState(
     val expandedDays: Set<String> = emptySet(),
     val selectedTrip: TripEntity? = null,
     val selectedTripPoints: List<TripPointEntity> = emptyList(),
-    val currencySymbol: String = "Br",
+    val currencySymbol: String = "BYN",
     val chartMetric: ChartMetric = ChartMetric.PER_100,
     val chartBars: List<ChartBar> = emptyList(),
     val selectedBarIndex: Int? = null,

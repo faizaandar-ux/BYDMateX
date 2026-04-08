@@ -21,7 +21,7 @@ data class WelcomeUiState(
     val step: Int = 1,
     val batteryCapacity: String = SettingsRepository.DEFAULT_BATTERY_CAPACITY,
     val currency: String = SettingsRepository.DEFAULT_CURRENCY,
-    val currencySymbol: String = "Br",
+    val currencySymbol: String = "BYN",
     val homeTariff: String = SettingsRepository.DEFAULT_HOME_TARIFF,
     val dcTariff: String = SettingsRepository.DEFAULT_DC_TARIFF,
     val tripCostMode: String = "home", // "home", "dc", "custom"

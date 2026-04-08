@@ -179,7 +179,7 @@ fun TripCard(
     trip: TripEntity,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    currencySymbol: String = "Br"
+    currencySymbol: String = "BYN"
 ) {
     // Compact single-row trip card with weight-based columns
     Row(
@@ -244,7 +244,7 @@ fun ChargeCard(
     charge: ChargeEntity,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    currencySymbol: String = "Br"
+    currencySymbol: String = "BYN"
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),

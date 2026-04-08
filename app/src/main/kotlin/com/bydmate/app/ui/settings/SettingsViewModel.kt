@@ -49,7 +49,7 @@ data class SettingsUiState(
     val dcTariff: String = SettingsRepository.DEFAULT_DC_TARIFF,
     val units: String = SettingsRepository.DEFAULT_UNITS,
     val currency: String = SettingsRepository.DEFAULT_CURRENCY,
-    val currencySymbol: String = "Br",
+    val currencySymbol: String = "BYN",
     val exportStatus: String? = null,
     val importStatus: String? = null,
     val appVersion: String = "0.0.0",

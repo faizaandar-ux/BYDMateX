@@ -27,7 +27,7 @@ data class ChargesUiState(
     val sessionCount: Int = 0,
     val totalKwh: Double = 0.0,
     val totalCost: Double = 0.0,
-    val currencySymbol: String = "Br",
+    val currencySymbol: String = "BYN",
     val typeFilter: String? = null,
     val expandedChargeId: Long? = null,
     val expandedChargePoints: List<ChargePointEntity> = emptyList()

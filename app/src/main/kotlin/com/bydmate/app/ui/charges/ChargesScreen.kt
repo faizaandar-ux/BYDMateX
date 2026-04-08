@@ -245,7 +245,7 @@ private fun ChargeSummaryRow(
     sessionCount: Int,
     totalKwh: Double,
     totalCost: Double,
-    currencySymbol: String = "Br"
+    currencySymbol: String = "BYN"
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),

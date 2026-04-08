@@ -39,7 +39,7 @@ class SettingsRepository @Inject constructor(
         const val DEFAULT_CONSUMPTION_BAD = "30"
 
         val CURRENCIES = listOf(
-            Currency("BYN", "Br", "Бел. руб."),
+            Currency("BYN", "BYN", "Бел. руб."),
             Currency("RUB", "₽", "Рос. руб."),
             Currency("UAH", "₴", "Гривна"),
             Currency("KZT", "₸", "Тенге"),
