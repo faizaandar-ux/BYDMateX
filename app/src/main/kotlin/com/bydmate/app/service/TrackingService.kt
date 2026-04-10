@@ -20,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.bydmate.app.MainActivity
 import com.bydmate.app.data.automation.AutomationEngine
+import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.repository.ChargeRepository
@@ -57,6 +58,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var settingsRepository: com.bydmate.app.data.repository.SettingsRepository
     @Inject lateinit var insightsManager: com.bydmate.app.data.remote.InsightsManager
     @Inject lateinit var automationEngine: AutomationEngine
+    @Inject lateinit var alicePollingManager: AlicePollingManager
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -106,6 +108,14 @@ class TrackingService : Service(), LocationListener {
         startPolling()
         _isRunning.value = true
         appendChainLog("TrackingService fully started")
+
+        // Start Smart Home polling if configured
+        serviceScope.launch {
+            val enabled = settingsRepository.getString(
+                com.bydmate.app.data.repository.SettingsRepository.KEY_ALICE_ENABLED, "false"
+            ) == "true"
+            if (enabled) alicePollingManager.start()
+        }
 
         // Finalize stale SUSPENDED charge sessions from previous runs
         serviceScope.launch {
@@ -168,6 +178,7 @@ class TrackingService : Service(), LocationListener {
             }
         }
 
+        alicePollingManager.stop()
         automationEngine.shutdown()
         serviceScope.cancel()
 

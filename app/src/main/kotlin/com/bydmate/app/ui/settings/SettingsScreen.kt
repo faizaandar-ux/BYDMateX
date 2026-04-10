@@ -2,8 +2,10 @@ package com.bydmate.app.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +23,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -422,7 +426,13 @@ fun SettingsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("BYDMate v${state.appVersion}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            "BYDMate v${state.appVersion}",
+                            color = TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { viewModel.onVersionTap() }
+                        )
                         Text("\u00A9 2026 AndyShaman", color = TextSecondary, fontSize = 14.sp)
                         if (state.lastBootInfo != null) {
                             Text(
@@ -455,6 +465,66 @@ fun SettingsScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = Color.White)
                         ) {
                             Text("Проверить обновления", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+
+                // Hidden Smart Home section — unlocked by tapping version 7 times
+                if (state.devModeUnlocked) {
+                    SectionHeader(text = "Умный дом")
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = CardSurface),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Polling", color = TextPrimary, fontSize = 14.sp)
+                                Switch(
+                                    checked = state.aliceEnabled,
+                                    onCheckedChange = { viewModel.toggleAlice(it) },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = AccentGreen,
+                                        uncheckedTrackColor = CardBorder
+                                    )
+                                )
+                            }
+                            SettingsTextField(
+                                label = "Endpoint URL",
+                                value = state.aliceEndpoint,
+                                onValueChange = { viewModel.updateAliceEndpoint(it) },
+                                keyboardType = KeyboardType.Uri
+                            )
+                            SettingsTextField(
+                                label = "API Key",
+                                value = state.aliceApiKey,
+                                onValueChange = { viewModel.updateAliceApiKey(it) },
+                                keyboardType = KeyboardType.Password
+                            )
+                            Button(
+                                onClick = { viewModel.saveAliceSettings() },
+                                enabled = state.aliceEndpoint.isNotBlank() && state.aliceApiKey.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark)
+                            ) {
+                                Text("Сохранить", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            }
+                            state.aliceSaveStatus?.let {
+                                Text(it, color = AccentGreen, fontSize = 12.sp)
+                            }
+                            Text(
+                                "Polling опрашивает Worker каждую секунду\nи выполняет команды через D+ API",
+                                color = TextMuted, fontSize = 11.sp, lineHeight = 15.sp
+                            )
                         }
                     }
                 }

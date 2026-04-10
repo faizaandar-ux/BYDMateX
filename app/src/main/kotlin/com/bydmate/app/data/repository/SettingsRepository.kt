@@ -29,6 +29,9 @@ class SettingsRepository @Inject constructor(
         const val KEY_IDLE_DRAIN_V2_CLEANUP = "idle_drain_v2_cleanup"
         const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
         const val KEY_OPENROUTER_MODEL = "openrouter_model"
+        const val KEY_ALICE_ENDPOINT = "alice_endpoint"
+        const val KEY_ALICE_API_KEY = "alice_api_key"
+        const val KEY_ALICE_ENABLED = "alice_enabled"
 
         const val DEFAULT_BATTERY_CAPACITY = "72.9"
         const val DEFAULT_HOME_TARIFF = "0.30"

@@ -73,7 +73,13 @@ data class SettingsUiState(
     val aiSaveStatus: String? = null,
     val tariffSaveStatus: String? = null,
     val recalcStatus: String? = null,
-    val showRecalcConfirm: Boolean = false
+    val showRecalcConfirm: Boolean = false,
+    // Hidden Smart Home settings (unlocked by tapping version 7 times)
+    val devModeUnlocked: Boolean = false,
+    val aliceEndpoint: String = "",
+    val aliceApiKey: String = "",
+    val aliceEnabled: Boolean = false,
+    val aliceSaveStatus: String? = null
 )
 
 @HiltViewModel
@@ -142,6 +148,11 @@ class SettingsViewModel @Inject constructor(
             val apiKey = settingsRepository.getString(SettingsRepository.KEY_OPENROUTER_API_KEY, "")
             val modelId = settingsRepository.getString(SettingsRepository.KEY_OPENROUTER_MODEL, "")
 
+            // Smart Home settings
+            val aliceEndpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "")
+            val aliceApiKey = settingsRepository.getString(SettingsRepository.KEY_ALICE_API_KEY, "")
+            val aliceEnabled = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENABLED, "false") == "true"
+
             _uiState.update {
                 it.copy(
                     batteryCapacity = capacity,
@@ -157,7 +168,10 @@ class SettingsViewModel @Inject constructor(
                     chainLog = chainLog,
                     openRouterApiKey = apiKey,
                     openRouterModel = modelId,
-                    openRouterModelName = modelId.substringAfterLast("/").substringBefore(":")
+                    openRouterModelName = modelId.substringAfterLast("/").substringBefore(":"),
+                    aliceEndpoint = aliceEndpoint,
+                    aliceApiKey = aliceApiKey,
+                    aliceEnabled = aliceEnabled
                 )
             }
         }
@@ -508,6 +522,50 @@ class SettingsViewModel @Inject constructor(
             } else {
                 _uiState.update { it.copy(aiSaveStatus = "Ошибка получения инсайта") }
             }
+        }
+    }
+
+    // --- Smart Home (hidden) ---
+
+    private var versionTapCount = 0
+    private var lastVersionTapTime = 0L
+
+    fun onVersionTap() {
+        val now = System.currentTimeMillis()
+        if (now - lastVersionTapTime > 2000) versionTapCount = 0
+        lastVersionTapTime = now
+        versionTapCount++
+        if (versionTapCount >= 7) {
+            _uiState.update { it.copy(devModeUnlocked = true) }
+            versionTapCount = 0
+        }
+    }
+
+    fun updateAliceEndpoint(value: String) {
+        _uiState.update { it.copy(aliceEndpoint = value) }
+    }
+
+    fun updateAliceApiKey(value: String) {
+        _uiState.update { it.copy(aliceApiKey = value) }
+    }
+
+    fun saveAliceSettings() {
+        val state = _uiState.value
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENDPOINT, state.aliceEndpoint)
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_API_KEY, state.aliceApiKey)
+            val enabled = state.aliceEndpoint.isNotBlank() && state.aliceApiKey.isNotBlank()
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
+            _uiState.update { it.copy(aliceEnabled = enabled, aliceSaveStatus = "Сохранено") }
+            delay(2000)
+            _uiState.update { it.copy(aliceSaveStatus = null) }
+        }
+    }
+
+    fun toggleAlice(enabled: Boolean) {
+        _uiState.update { it.copy(aliceEnabled = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
         }
     }
 

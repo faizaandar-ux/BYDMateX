@@ -9,6 +9,7 @@
 .externalNativeBuild
 .cxx
 *.apk
+*.idsig
 *.ap_
 *.dex
 *.class
