@@ -70,6 +70,12 @@
 
 *Аккордеон Месяц > День > Поездка с фильтрами и цветовой индикацией расхода*
 
+### Автоматизация
+
+<img src="docs/screenshots/automation.jpg" alt="Automation" width="800">
+
+*Правила КОГДА→ТОГДА, редактор условий и действий, настройки срабатывания*
+
 ### Настройки
 
 <img src="docs/screenshots/settings.jpg" alt="Settings" width="800">
