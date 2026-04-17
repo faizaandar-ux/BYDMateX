@@ -60,6 +60,7 @@ data class DashboardUiState(
     val insightDynamics: List<DynamicMetric> = emptyList(),
     val insightInsights: List<String> = emptyList(),
     val insightTone: String = "good",
+    val effectiveInsightTone: String = "good",
     val insightDate: String? = null,
     val insightLoading: Boolean = false,
     val insightError: String? = null,
@@ -139,6 +140,16 @@ class DashboardViewModel @Inject constructor(
                         exteriorTemp = data?.exteriorTemp ?: current.exteriorTemp,
                         batteryHealthStatus = calculateBatteryStatus(data, current),
                         voltage12vStatus = calculate12vStatus(data?.voltage12v ?: current.voltage12v),
+                        effectiveInsightTone = com.bydmate.app.data.automation.InsightToneLogic.worst(
+                            current.insightTone,
+                            com.bydmate.app.data.automation.InsightToneLogic.voltage12vTone(
+                                data?.voltage12v ?: current.voltage12v
+                            ),
+                            com.bydmate.app.data.automation.InsightToneLogic.cellDeltaTone(
+                                data?.maxCellVoltage ?: current.cellVoltageMax,
+                                data?.minCellVoltage ?: current.cellVoltageMin
+                            )
+                        ),
                         estimatedRangeKm = calculateRange(newSoc, current.estimatedRangeKm),
                         diPlusConnected = connected
                     )
@@ -297,12 +308,17 @@ class DashboardViewModel @Inject constructor(
 
             val cached = insightsManager.getCachedInsight()
             if (cached != null) {
-                _uiState.update { it.copy(
+                _uiState.update { current -> current.copy(
                     insightTitle = cached.title,
                     insightSummary = cached.summary,
                     insightDynamics = cached.dynamics,
                     insightInsights = cached.insights,
                     insightTone = cached.tone,
+                    effectiveInsightTone = com.bydmate.app.data.automation.InsightToneLogic.worst(
+                        cached.tone,
+                        com.bydmate.app.data.automation.InsightToneLogic.voltage12vTone(current.voltage12v),
+                        com.bydmate.app.data.automation.InsightToneLogic.cellDeltaTone(current.cellVoltageMax, current.cellVoltageMin)
+                    ),
                     insightDate = insightsManager.getCachedDate()
                 ) }
             }
@@ -314,12 +330,17 @@ class DashboardViewModel @Inject constructor(
             _uiState.update { it.copy(insightLoading = true, insightError = null) }
             val insight = insightsManager.refresh()
             if (insight != null) {
-                _uiState.update { it.copy(
+                _uiState.update { current -> current.copy(
                     insightTitle = insight.title,
                     insightSummary = insight.summary,
                     insightDynamics = insight.dynamics,
                     insightInsights = insight.insights,
                     insightTone = insight.tone,
+                    effectiveInsightTone = com.bydmate.app.data.automation.InsightToneLogic.worst(
+                        insight.tone,
+                        com.bydmate.app.data.automation.InsightToneLogic.voltage12vTone(current.voltage12v),
+                        com.bydmate.app.data.automation.InsightToneLogic.cellDeltaTone(current.cellVoltageMax, current.cellVoltageMin)
+                    ),
                     insightDate = insightsManager.getCachedDate(),
                     insightLoading = false
                 ) }
