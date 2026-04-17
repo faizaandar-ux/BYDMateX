@@ -181,6 +181,7 @@ class AutomationEngine @Inject constructor(
         "MinBatTemp" -> data.minBatTemp?.toDouble()
         "Power" -> data.power
         "Mileage" -> data.mileage
+        "Voltage12V" -> data.voltage12v
         else -> null
     }
 
