@@ -6,9 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.bydmate.app.data.local.dao.RuleDao
 import com.bydmate.app.data.local.dao.RuleLogDao
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.RuleLogEntity
 import com.bydmate.app.data.local.entity.TriggerDef
+import com.bydmate.app.data.repository.PlaceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -159,13 +161,15 @@ data class AutomationUiState(
     val showEditor: Boolean = false,
     val showJournal: Boolean = false,
     val editing: EditingRule = EditingRule(),
-    val showDeleteConfirm: Long? = null
+    val showDeleteConfirm: Long? = null,
+    val places: List<PlaceEntity> = emptyList()
 )
 
 @HiltViewModel
 class AutomationViewModel @Inject constructor(
     private val ruleDao: RuleDao,
     private val ruleLogDao: RuleLogDao,
+    private val placeRepository: PlaceRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -182,6 +186,11 @@ class AutomationViewModel @Inject constructor(
         viewModelScope.launch {
             ruleLogDao.getRecent(100).collect { logs ->
                 _uiState.update { it.copy(logs = logs) }
+            }
+        }
+        viewModelScope.launch {
+            placeRepository.getAll().collect { places ->
+                _uiState.update { it.copy(places = places) }
             }
         }
     }

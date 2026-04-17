@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -72,6 +73,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.RuleLogEntity
 import com.bydmate.app.data.local.entity.TriggerDef
@@ -152,6 +154,7 @@ fun AutomationScreen(
     if (state.showEditor) {
         EditorDialog(
             editing = state.editing,
+            places = state.places,
             onUpdate = { viewModel.updateEditing(it) },
             onSave = { viewModel.saveRule() },
             onDismiss = { viewModel.closeEditor() }
@@ -307,6 +310,7 @@ private fun RuleCard(
 @Composable
 private fun EditorDialog(
     editing: EditingRule,
+    places: List<PlaceEntity>,
     onUpdate: (EditingRule.() -> EditingRule) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit
@@ -383,6 +387,7 @@ private fun EditorDialog(
                         TriggerRow(
                             index = idx,
                             trigger = trigger,
+                            places = places,
                             onUpdate = { newTrigger ->
                                 onUpdate {
                                     copy(triggers = triggers.toMutableList().apply { set(idx, newTrigger) })
@@ -398,12 +403,18 @@ private fun EditorDialog(
                     }
 
                     if (editing.triggers.size < 5) {
-                        AddButton("+ Добавить условие") {
-                            val p = TRIGGER_PARAMS.first()
-                            onUpdate {
-                                copy(triggers = triggers + TriggerDef(p.param, p.chineseName, ">", "0", p.displayName))
+                        AddTriggerButton(
+                            places = places,
+                            onAddParam = {
+                                val p = TRIGGER_PARAMS.first()
+                                onUpdate {
+                                    copy(triggers = triggers + TriggerDef(p.param, p.chineseName, ">", "0", p.displayName))
+                                }
+                            },
+                            onAddPlace = { place ->
+                                onUpdate { copy(triggers = triggers + newPlaceTrigger(place)) }
                             }
-                        }
+                        )
                     }
                 }
 
@@ -530,6 +541,7 @@ private fun EditorDialog(
 private fun TriggerRow(
     index: Int,
     trigger: TriggerDef,
+    places: List<PlaceEntity>,
     onUpdate: (TriggerDef) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -544,101 +556,197 @@ private fun TriggerRow(
         Text("${index + 1}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextMuted,
             modifier = Modifier.width(16.dp))
 
-        // Param dropdown
-        CatalogDropdown(
-            selected = TRIGGER_PARAMS.find { it.param == trigger.param }?.displayName ?: trigger.param,
-            items = TRIGGER_PARAMS.map { it.displayName },
-            categories = TRIGGER_PARAMS.map { it.category },
-            modifier = Modifier.width(150.dp),
-            onSelect = { idx ->
-                val p = TRIGGER_PARAMS[idx]
-                onUpdate(trigger.copy(param = p.param, chineseName = p.chineseName,
-                    displayName = "${p.displayName} ${trigger.operator} ${trigger.value}"))
-            }
-        )
-        Spacer(Modifier.width(4.dp))
-
-        // Operator dropdown
-        var opExpanded by remember { mutableStateOf(false) }
-        Box {
-            Text(
-                trigger.operator,
-                fontSize = 13.sp, color = AccentOrange, fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .background(CardSurface, RoundedCornerShape(6.dp))
-                    .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
-                    .clickable { opExpanded = true }
-                    .padding(8.dp, 6.dp)
-                    .width(30.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-            DropdownMenu(expanded = opExpanded, onDismissRequest = { opExpanded = false }) {
-                OPERATORS.forEach { op ->
-                    DropdownMenuItem(
-                        text = { Text(op, fontWeight = FontWeight.Bold) },
-                        onClick = {
-                            opExpanded = false
-                            onUpdate(trigger.copy(operator = op))
-                        }
-                    )
-                }
-            }
+        when (trigger.kind) {
+            "place_enter", "place_exit" -> PlaceTriggerControls(trigger, places, onUpdate)
+            else -> ParamTriggerControls(trigger, onUpdate)
         }
-        Spacer(Modifier.width(4.dp))
 
-        // Value: enum dropdown or text input with unit
-        val paramOption = TRIGGER_PARAMS.find { it.param == trigger.param }
-        if (paramOption?.enumValues != null) {
-            // Enum dropdown
-            var enumExpanded by remember { mutableStateOf(false) }
-            val enumLabel = paramOption.enumValues.find { it.first == trigger.value }?.second ?: trigger.value
-            Box {
-                Text(
-                    enumLabel,
-                    fontSize = 13.sp, color = AccentGreen,
-                    modifier = Modifier
-                        .background(CardSurface, RoundedCornerShape(6.dp))
-                        .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
-                        .clickable { enumExpanded = true }
-                        .padding(8.dp, 6.dp)
-                )
-                DropdownMenu(expanded = enumExpanded, onDismissRequest = { enumExpanded = false }) {
-                    paramOption.enumValues.forEach { (value, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label, fontSize = 13.sp) },
-                            onClick = {
-                                enumExpanded = false
-                                onUpdate(trigger.copy(value = value, operator = "=="))
-                            }
-                        )
-                    }
-                }
-            }
-        } else {
-            // Numeric input
-            OutlinedTextField(
-                value = trigger.value,
-                onValueChange = { v -> onUpdate(trigger.copy(value = v)) },
-                modifier = Modifier.width(70.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = AccentGreen, unfocusedBorderColor = CardBorder,
-                    focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = AccentGreen
-                ),
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            )
-            if (paramOption?.unit?.isNotEmpty() == true) {
-                Spacer(Modifier.width(4.dp))
-                Text(paramOption.unit, fontSize = 12.sp, color = TextMuted)
-            }
-        }
         Spacer(Modifier.weight(1f))
 
         IconButton(onClick = onDelete, modifier = Modifier.size(24.dp)) {
             Icon(Icons.Outlined.Close, "delete", tint = Color(0xFFEF4444).copy(alpha = 0.5f), modifier = Modifier.size(14.dp))
         }
+    }
+}
+
+@Composable
+private fun ParamTriggerControls(
+    trigger: TriggerDef,
+    onUpdate: (TriggerDef) -> Unit
+) {
+    // Param dropdown
+    CatalogDropdown(
+        selected = TRIGGER_PARAMS.find { it.param == trigger.param }?.displayName ?: trigger.param,
+        items = TRIGGER_PARAMS.map { it.displayName },
+        categories = TRIGGER_PARAMS.map { it.category },
+        modifier = Modifier.width(150.dp),
+        onSelect = { idx ->
+            val p = TRIGGER_PARAMS[idx]
+            onUpdate(trigger.copy(param = p.param, chineseName = p.chineseName,
+                displayName = "${p.displayName} ${trigger.operator} ${trigger.value}"))
+        }
+    )
+    Spacer(Modifier.width(4.dp))
+
+    // Operator dropdown
+    var opExpanded by remember { mutableStateOf(false) }
+    Box {
+        Text(
+            trigger.operator,
+            fontSize = 13.sp, color = AccentOrange, fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .background(CardSurface, RoundedCornerShape(6.dp))
+                .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+                .clickable { opExpanded = true }
+                .padding(8.dp, 6.dp)
+                .width(30.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        DropdownMenu(expanded = opExpanded, onDismissRequest = { opExpanded = false }) {
+            OPERATORS.forEach { op ->
+                DropdownMenuItem(
+                    text = { Text(op, fontWeight = FontWeight.Bold) },
+                    onClick = {
+                        opExpanded = false
+                        onUpdate(trigger.copy(operator = op))
+                    }
+                )
+            }
+        }
+    }
+    Spacer(Modifier.width(4.dp))
+
+    // Value: enum dropdown or text input with unit
+    val paramOption = TRIGGER_PARAMS.find { it.param == trigger.param }
+    if (paramOption?.enumValues != null) {
+        // Enum dropdown
+        var enumExpanded by remember { mutableStateOf(false) }
+        val enumLabel = paramOption.enumValues.find { it.first == trigger.value }?.second ?: trigger.value
+        Box {
+            Text(
+                enumLabel,
+                fontSize = 13.sp, color = AccentGreen,
+                modifier = Modifier
+                    .background(CardSurface, RoundedCornerShape(6.dp))
+                    .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+                    .clickable { enumExpanded = true }
+                    .padding(8.dp, 6.dp)
+            )
+            DropdownMenu(expanded = enumExpanded, onDismissRequest = { enumExpanded = false }) {
+                paramOption.enumValues.forEach { (value, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label, fontSize = 13.sp) },
+                        onClick = {
+                            enumExpanded = false
+                            onUpdate(trigger.copy(value = value, operator = "=="))
+                        }
+                    )
+                }
+            }
+        }
+    } else {
+        // Numeric input
+        OutlinedTextField(
+            value = trigger.value,
+            onValueChange = { v -> onUpdate(trigger.copy(value = v)) },
+            modifier = Modifier.width(70.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = AccentGreen, unfocusedBorderColor = CardBorder,
+                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = AccentGreen
+            ),
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        )
+        if (paramOption?.unit?.isNotEmpty() == true) {
+            Spacer(Modifier.width(4.dp))
+            Text(paramOption.unit, fontSize = 12.sp, color = TextMuted)
+        }
+    }
+}
+
+@Composable
+private fun PlaceTriggerControls(
+    trigger: TriggerDef,
+    places: List<PlaceEntity>,
+    onUpdate: (TriggerDef) -> Unit
+) {
+    val placeExists = places.any { it.id == trigger.placeId }
+    val isStale = trigger.placeId != null && !placeExists
+
+    Icon(
+        Icons.Outlined.Place,
+        contentDescription = null,
+        tint = TextMuted,
+        modifier = Modifier.size(16.dp)
+    )
+    Spacer(Modifier.width(4.dp))
+
+    if (isStale || (trigger.placeId == null && places.isEmpty())) {
+        // Show warning when the referenced place was deleted
+        Text(
+            "Место удалено",
+            fontSize = 13.sp,
+            color = Color(0xFFEF4444),
+            modifier = Modifier
+                .background(Color(0xFFEF4444).copy(alpha = 0.08f), RoundedCornerShape(6.dp))
+                .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                .padding(8.dp, 6.dp)
+        )
+    } else {
+        // Place-name dropdown
+        var placeExpanded by remember { mutableStateOf(false) }
+        Box(modifier = Modifier.width(150.dp)) {
+            Text(
+                trigger.placeName ?: "<удалено>",
+                fontSize = 13.sp, color = TextPrimary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CardSurface, RoundedCornerShape(6.dp))
+                    .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+                    .clickable { placeExpanded = true }
+                    .padding(8.dp, 7.dp),
+                maxLines = 1
+            )
+            DropdownMenu(expanded = placeExpanded, onDismissRequest = { placeExpanded = false }) {
+                places.forEach { place ->
+                    DropdownMenuItem(
+                        text = { Text(place.name, fontSize = 13.sp) },
+                        onClick = {
+                            placeExpanded = false
+                            val kindLabel = if (trigger.kind == "place_enter") "Вход в" else "Выход из"
+                            onUpdate(trigger.copy(
+                                placeId = place.id,
+                                placeName = place.name,
+                                displayName = "$kindLabel «${place.name}»"
+                            ))
+                        }
+                    )
+                }
+            }
+        }
+    }
+    Spacer(Modifier.width(4.dp))
+
+    // Kind toggle pill: Войти / Выйти
+    val isEnter = trigger.kind == "place_enter"
+    val label = if (isEnter) "Войти" else "Выйти"
+    Box(
+        modifier = Modifier
+            .background(CardSurface, RoundedCornerShape(6.dp))
+            .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+            .clickable {
+                val newKind = if (isEnter) "place_exit" else "place_enter"
+                val kindLabel = if (newKind == "place_enter") "Вход в" else "Выход из"
+                onUpdate(trigger.copy(
+                    kind = newKind,
+                    displayName = "$kindLabel «${trigger.placeName ?: "?"}»"
+                ))
+            }
+            .padding(8.dp, 6.dp)
+    ) {
+        Text(label, color = AccentGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -915,6 +1023,66 @@ private fun AddButton(label: String, onClick: () -> Unit) {
     ) {
         Text(label, fontSize = 12.sp, color = TextMuted)
     }
+}
+
+@Composable
+private fun AddTriggerButton(
+    places: List<PlaceEntity>,
+    onAddParam: () -> Unit,
+    onAddPlace: (PlaceEntity) -> Unit
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.5.dp, CardBorder, RoundedCornerShape(8.dp))
+                .clickable { menuExpanded = true }
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("+ Добавить условие", fontSize = 12.sp, color = TextMuted)
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Параметр", fontSize = 13.sp) },
+                onClick = { menuExpanded = false; onAddParam() }
+            )
+            val firstPlace = places.firstOrNull()
+            DropdownMenuItem(
+                text = {
+                    if (firstPlace != null) {
+                        Text("Место", fontSize = 13.sp)
+                    } else {
+                        Column {
+                            Text("Место", fontSize = 13.sp, color = TextSecondary)
+                            Text("Сначала создайте место в настройках", fontSize = 11.sp, color = TextMuted)
+                        }
+                    }
+                },
+                onClick = {
+                    if (firstPlace != null) {
+                        menuExpanded = false
+                        onAddPlace(firstPlace)
+                    }
+                },
+                enabled = firstPlace != null
+            )
+        }
+    }
+}
+
+private fun newPlaceTrigger(place: PlaceEntity): TriggerDef {
+    return TriggerDef(
+        param = "Place",
+        chineseName = "位置",
+        operator = "==",
+        value = "enter",
+        displayName = "Вход в «${place.name}»",
+        kind = "place_enter",
+        placeId = place.id,
+        placeName = place.name
+    )
 }
 
 // --- Helpers ---
