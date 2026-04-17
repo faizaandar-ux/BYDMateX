@@ -27,6 +27,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
@@ -455,10 +457,15 @@ private fun EditorDialog(
                     }
 
                     if (editing.actions.size < 10) {
-                        val a = ACTION_COMMANDS.first()
-                        AddButton("+ Добавить действие") {
-                            onUpdate { copy(actions = actions + ActionDef(a.command, a.displayName)) }
-                        }
+                        AddActionButton(
+                            onAddParam = {
+                                val a = ACTION_COMMANDS.first()
+                                onUpdate { copy(actions = actions + ActionDef(a.command, a.displayName)) }
+                            },
+                            onAddNotification = { silent ->
+                                onUpdate { copy(actions = actions + newNotificationAction(silent)) }
+                            }
+                        )
                     }
 
                     Spacer(Modifier.height(20.dp))
@@ -770,22 +777,36 @@ private fun ActionRow(
         Text("${index + 1}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AccentTeal,
             modifier = Modifier.width(16.dp))
 
-        CatalogDropdown(
-            selected = action.displayName,
-            items = ACTION_COMMANDS.map { it.displayName },
-            categories = ACTION_COMMANDS.map { it.category },
-            modifier = Modifier.weight(1f),
-            onSelect = { idx ->
-                val a = ACTION_COMMANDS[idx]
-                onUpdate(ActionDef(a.command, a.displayName))
-            }
-        )
-        Spacer(Modifier.width(4.dp))
+        when (action.kind) {
+            "notification_silent", "notification_sound" ->
+                NotificationActionControls(action = action, onUpdate = onUpdate, modifier = Modifier.weight(1f))
+            else -> // "param" (default)
+                ParamActionControls(action = action, onUpdate = onUpdate, modifier = Modifier.weight(1f))
+        }
 
+        Spacer(Modifier.width(4.dp))
         IconButton(onClick = onDelete, modifier = Modifier.size(24.dp)) {
             Icon(Icons.Outlined.Close, "delete", tint = Color(0xFFEF4444).copy(alpha = 0.5f), modifier = Modifier.size(14.dp))
         }
     }
+}
+
+@Composable
+private fun ParamActionControls(
+    action: ActionDef,
+    onUpdate: (ActionDef) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    CatalogDropdown(
+        selected = action.displayName,
+        items = ACTION_COMMANDS.map { it.displayName },
+        categories = ACTION_COMMANDS.map { it.category },
+        modifier = modifier,
+        onSelect = { idx ->
+            val a = ACTION_COMMANDS[idx]
+            onUpdate(ActionDef(a.command, a.displayName))
+        }
+    )
 }
 
 // --- Catalog Dropdown (with category headers) ---
@@ -1012,17 +1033,159 @@ private fun SettingRow(label: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AddButton(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.5.dp, CardBorder, RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, fontSize = 12.sp, color = TextMuted)
+private fun AddActionButton(
+    onAddParam: () -> Unit,
+    onAddNotification: (silent: Boolean) -> Unit
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.5.dp, CardBorder, RoundedCornerShape(8.dp))
+                .clickable { menuExpanded = true }
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("+ Добавить действие", fontSize = 12.sp, color = TextMuted)
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(
+                text = { Text("D+ команда", fontSize = 13.sp) },
+                onClick = { menuExpanded = false; onAddParam() }
+            )
+            DropdownMenuItem(
+                text = { Text("Уведомление (без звука)", fontSize = 13.sp) },
+                onClick = { menuExpanded = false; onAddNotification(true) }
+            )
+            DropdownMenuItem(
+                text = { Text("Уведомление (звук)", fontSize = 13.sp) },
+                onClick = { menuExpanded = false; onAddNotification(false) }
+            )
+        }
     }
+}
+
+@Composable
+private fun NotificationActionControls(
+    action: ActionDef,
+    onUpdate: (ActionDef) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var editing by remember { mutableStateOf(false) }
+    val silent = action.kind == "notification_silent"
+    val title = action.notificationTitle()
+    val text = action.notificationText()
+    val preview = when {
+        title.isNotBlank() && text.isNotBlank() -> "$title — $text"
+        title.isNotBlank() -> title
+        text.isNotBlank() -> text
+        else -> "Нажмите для настройки…"
+    }
+
+    Row(
+        modifier = modifier
+            .background(CardSurface, RoundedCornerShape(6.dp))
+            .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+            .clickable { editing = true }
+            .padding(8.dp, 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (silent) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
+            contentDescription = null,
+            tint = AccentTeal,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = preview,
+            fontSize = 13.sp,
+            color = if (title.isBlank() && text.isBlank()) TextMuted else TextPrimary,
+            maxLines = 1
+        )
+    }
+
+    if (editing) {
+        NotificationEditDialog(
+            initialTitle = title,
+            initialText = text,
+            silent = silent,
+            onDismiss = { editing = false },
+            onSave = { newTitle, newText ->
+                onUpdate(action.withNotification(newTitle, newText))
+                editing = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun NotificationEditDialog(
+    initialTitle: String,
+    initialText: String,
+    silent: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var titleText by remember { mutableStateOf(initialTitle) }
+    var bodyText by remember { mutableStateOf(initialText) }
+    val canSave = titleText.trim().isNotBlank() && titleText.trim().length <= 40
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        focusedBorderColor = AccentGreen,
+        unfocusedBorderColor = CardBorder,
+        focusedLabelColor = AccentGreen,
+        unfocusedLabelColor = TextSecondary,
+        cursorColor = AccentGreen
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardSurface,
+        title = {
+            Text(
+                text = if (silent) "Уведомление (без звука)" else "Уведомление (звук)",
+                color = TextPrimary,
+                fontSize = 16.sp
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = titleText,
+                    onValueChange = { if (it.length <= 40) titleText = it },
+                    label = { Text("Заголовок") },
+                    singleLine = true,
+                    isError = titleText.isNotEmpty() && !canSave,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = bodyText,
+                    onValueChange = { if (it.length <= 200) bodyText = it },
+                    label = { Text("Текст (опционально)") },
+                    maxLines = 3,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (canSave) onSave(titleText.trim(), bodyText.trim()) }, enabled = canSave) {
+                Text("Сохранить", color = if (canSave) AccentGreen else TextMuted)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Отмена", color = TextSecondary)
+            }
+        }
+    )
 }
 
 @Composable

@@ -402,3 +402,27 @@ class AutomationViewModel @Inject constructor(
         prefs.edit().putBoolean("templates_inserted", true).apply()
     }
 }
+
+// --- Action kind helpers (v2.3.0) ---
+
+fun newNotificationAction(silent: Boolean): ActionDef = ActionDef(
+    command = "",
+    displayName = if (silent) "Уведомление (без звука)" else "Уведомление (звук)",
+    kind = if (silent) "notification_silent" else "notification_sound",
+    payload = """{"title":"","text":""}"""
+)
+
+fun ActionDef.notificationTitle(): String = try {
+    org.json.JSONObject(payload ?: "{}").optString("title")
+} catch (e: Exception) { "" }
+
+fun ActionDef.notificationText(): String = try {
+    org.json.JSONObject(payload ?: "{}").optString("text")
+} catch (e: Exception) { "" }
+
+fun ActionDef.withNotification(title: String, text: String): ActionDef = copy(
+    payload = org.json.JSONObject().apply {
+        put("title", title)
+        put("text", text)
+    }.toString()
+)
