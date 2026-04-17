@@ -158,7 +158,7 @@ class DashboardViewModel @Inject constructor(
 
     private fun observeRecentTrips() {
         viewModelScope.launch {
-            tripRepository.getRecentTrips(6).collect { trips ->
+            tripRepository.getRecentTrips(7).collect { trips ->
                 _uiState.update { it.copy(recentTrips = trips) }
             }
         }
