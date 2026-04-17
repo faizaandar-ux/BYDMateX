@@ -19,7 +19,6 @@ import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.RuleLogEntity
 import com.bydmate.app.data.local.entity.TriggerDef
-import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.repository.PlaceRepository
 import com.bydmate.app.service.TrackingService
@@ -39,7 +38,7 @@ import javax.inject.Singleton
 class AutomationEngine @Inject constructor(
     private val ruleDao: RuleDao,
     private val ruleLogDao: RuleLogDao,
-    private val controlClient: DiParsControlClient,
+    private val actionDispatcher: ActionDispatcher,
     private val placeRepository: PlaceRepository,
     @ApplicationContext private val context: Context
 ) {
@@ -52,7 +51,6 @@ class AutomationEngine @Inject constructor(
         const val ACTION_CONFIRM = "com.bydmate.app.AUTOMATION_CONFIRM"
         const val ACTION_CANCEL = "com.bydmate.app.AUTOMATION_CANCEL"
         const val EXTRA_NOTIF_ID = "notif_id"
-        private val BLOCKED_PATTERNS = listOf("发送CAN", "执行SHELL", "下电")
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -228,20 +226,15 @@ class AutomationEngine @Inject constructor(
         var allSuccess = true
 
         for (action in actions) {
-            val blockReason = getBlockReason(action.command, data)
-            val success = if (blockReason == null) {
-                controlClient.sendCommand(action.command)
-            } else {
-                Log.w(TAG, "Blocked '${action.command}' for rule '${rule.name}': $blockReason")
-                false
-            }
+            val result = actionDispatcher.dispatch(action, data)
             results.put(JSONObject().apply {
                 put("command", action.command)
                 put("displayName", action.displayName)
-                put("success", success)
-                if (blockReason != null) put("reason", blockReason)
+                put("kind", action.kind)
+                put("success", result.success)
+                if (result.reason != null) put("reason", result.reason)
             })
-            if (!success) allSuccess = false
+            if (!result.success) allSuccess = false
         }
 
         ruleLogDao.insert(
@@ -255,27 +248,6 @@ class AutomationEngine @Inject constructor(
             )
         )
         Log.i(TAG, "Rule '${rule.name}' executed: success=$allSuccess")
-    }
-
-    // --- Safety ---
-
-    private fun isWindowOpenCommand(command: String): Boolean {
-        val subjects = listOf("车窗", "天窗", "主驾", "副驾", "后左", "后右", "遮阳帘")
-        val openWords = listOf("全开", "半开", "打开", "通风")
-        val isWindow = subjects.any { command.contains(it) }
-        val isOpen = openWords.any { command.contains(it) }
-        return isWindow && isOpen && !command.contains("关")
-    }
-
-    // Returns null if safe, or a reason string if blocked
-    private fun getBlockReason(command: String, data: DiParsData?): String? {
-        if (BLOCKED_PATTERNS.any { command.contains(it) }) return "Запрещённая команда"
-        if (data == null) return null
-        if (isWindowOpenCommand(command)) {
-            val speed = data.speed ?: return "Скорость неизвестна"
-            if (speed > 80) return "Открытие окон заблокировано на скорости ${speed} км/ч (>80)"
-        }
-        return null
     }
 
     fun shutdown() {
