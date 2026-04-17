@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.location.Location
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -14,11 +15,13 @@ import kotlin.math.abs
 import com.bydmate.app.data.local.dao.RuleDao
 import com.bydmate.app.data.local.dao.RuleLogDao
 import com.bydmate.app.data.local.entity.ActionDef
+import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.data.local.entity.RuleEntity
 import com.bydmate.app.data.local.entity.RuleLogEntity
 import com.bydmate.app.data.local.entity.TriggerDef
 import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
+import com.bydmate.app.data.repository.PlaceRepository
 import com.bydmate.app.service.TrackingService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +40,7 @@ class AutomationEngine @Inject constructor(
     private val ruleDao: RuleDao,
     private val ruleLogDao: RuleLogDao,
     private val controlClient: DiParsControlClient,
+    private val placeRepository: PlaceRepository,
     @ApplicationContext private val context: Context
 ) {
     companion object {
@@ -73,6 +77,9 @@ class AutomationEngine @Inject constructor(
     suspend fun evaluate(data: DiParsData) {
         cleanupExpired()
 
+        val location = TrackingService.lastLocation.value
+        val placesById = placeRepository.getAllSnapshot().associateBy { it.id }
+
         val rules = ruleDao.getEnabled()
         val now = System.currentTimeMillis()
 
@@ -88,7 +95,7 @@ class AutomationEngine @Inject constructor(
                 val triggers = TriggerDef.listFromJson(rule.triggers)
                 if (triggers.isEmpty()) continue
 
-                val matched = evaluateTriggers(triggers, data, rule.triggerLogic)
+                val matched = evaluateTriggers(triggers, data, rule.triggerLogic, location, placesById)
                 val wasMatched = lastEvalResults.put(rule.id, matched) ?: false
 
                 // Edge trigger: only fire on false→true transition
@@ -118,17 +125,41 @@ class AutomationEngine @Inject constructor(
     private fun evaluateTriggers(
         triggers: List<TriggerDef>,
         data: DiParsData,
-        logic: String
+        logic: String,
+        location: Location?,
+        places: Map<Long, PlaceEntity>
     ): Boolean {
         val results = triggers.map { trigger ->
-            val actual = getParamValue(data, trigger.param) ?: return@map false
-            val expected = trigger.value.toDoubleOrNull() ?: return@map false
-            compare(actual, trigger.operator, expected)
+            when (trigger.kind) {
+                "place_enter" -> evaluatePlace(trigger, location, places, enterKind = true)
+                "place_exit" -> evaluatePlace(trigger, location, places, enterKind = false)
+                else -> { // "param" (default)
+                    val actual = getParamValue(data, trigger.param) ?: return@map false
+                    val expected = trigger.value.toDoubleOrNull() ?: return@map false
+                    compare(actual, trigger.operator, expected)
+                }
+            }
         }
         return when (logic) {
             "OR" -> results.any { it }
             else -> results.all { it }
         }
+    }
+
+    private fun evaluatePlace(
+        trigger: TriggerDef,
+        location: Location?,
+        places: Map<Long, PlaceEntity>,
+        enterKind: Boolean
+    ): Boolean {
+        if (location == null) return false
+        val placeId = trigger.placeId ?: return false
+        val place = places[placeId] ?: return false
+        val inside = PlaceGeometry.isInside(
+            location.latitude, location.longitude,
+            place.lat, place.lon, place.radiusM
+        )
+        return if (enterKind) inside else !inside
     }
 
     private fun compare(actual: Double, op: String, expected: Double): Boolean = when (op) {
@@ -256,7 +287,11 @@ class AutomationEngine @Inject constructor(
     private fun buildSnapshot(triggers: List<TriggerDef>, data: DiParsData): String {
         val json = JSONObject()
         triggers.forEach { t ->
-            json.put(t.param, getParamValue(data, t.param) ?: JSONObject.NULL)
+            when (t.kind) {
+                "place_enter" -> json.put("place_enter", t.placeName ?: "?")
+                "place_exit" -> json.put("place_exit", t.placeName ?: "?")
+                else -> json.put(t.param, getParamValue(data, t.param) ?: JSONObject.NULL)
+            }
         }
         return json.toString()
     }
