@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Place
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -464,6 +466,9 @@ private fun EditorDialog(
                             },
                             onAddNotification = { silent ->
                                 onUpdate { copy(actions = actions + newNotificationAction(silent)) }
+                            },
+                            onAddAppLaunch = {
+                                onUpdate { copy(actions = actions + newAppLaunchAction()) }
                             }
                         )
                     }
@@ -780,6 +785,8 @@ private fun ActionRow(
         when (action.kind) {
             "notification_silent", "notification_sound" ->
                 NotificationActionControls(action = action, onUpdate = onUpdate, modifier = Modifier.weight(1f))
+            "app_launch" ->
+                AppLaunchActionControls(action = action, onUpdate = onUpdate, modifier = Modifier.weight(1f))
             else -> // "param" (default)
                 ParamActionControls(action = action, onUpdate = onUpdate, modifier = Modifier.weight(1f))
         }
@@ -1035,7 +1042,8 @@ private fun SettingRow(label: String, content: @Composable () -> Unit) {
 @Composable
 private fun AddActionButton(
     onAddParam: () -> Unit,
-    onAddNotification: (silent: Boolean) -> Unit
+    onAddNotification: (silent: Boolean) -> Unit,
+    onAddAppLaunch: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -1061,6 +1069,10 @@ private fun AddActionButton(
             DropdownMenuItem(
                 text = { Text("Уведомление (звук)", fontSize = 13.sp) },
                 onClick = { menuExpanded = false; onAddNotification(false) }
+            )
+            DropdownMenuItem(
+                text = { Text("Запуск приложения", fontSize = 13.sp) },
+                onClick = { menuExpanded = false; onAddAppLaunch() }
             )
         }
     }
@@ -1186,6 +1198,151 @@ private fun NotificationEditDialog(
             }
         }
     )
+}
+
+// --- App Launch Action Controls ---
+
+@Composable
+private fun AppLaunchActionControls(
+    action: ActionDef,
+    onUpdate: (ActionDef) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var editing by remember { mutableStateOf(false) }
+    val pkg = action.appLaunchPackageName()
+    val label = action.appLaunchLabel()
+    val preview = when {
+        label.isNotBlank() -> label
+        pkg.isNotBlank() -> pkg
+        else -> "Нажмите, чтобы выбрать приложение…"
+    }
+
+    Row(
+        modifier = modifier
+            .background(CardSurface, RoundedCornerShape(6.dp))
+            .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
+            .clickable { editing = true }
+            .padding(8.dp, 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Apps,
+            contentDescription = null,
+            tint = AccentTeal,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = preview,
+            fontSize = 13.sp,
+            color = if (label.isBlank() && pkg.isBlank()) TextMuted else TextPrimary,
+            maxLines = 1
+        )
+    }
+
+    if (editing) {
+        AppLaunchPickerDialog(
+            currentPackage = pkg,
+            onDismiss = { editing = false },
+            onSelect = { newPkg, newLabel ->
+                onUpdate(action.withAppLaunch(newPkg, newLabel))
+                editing = false
+            }
+        )
+    }
+}
+
+private data class InstalledApp(val packageName: String, val label: String)
+
+@Composable
+private fun AppLaunchPickerDialog(
+    currentPackage: String,
+    onDismiss: () -> Unit,
+    onSelect: (pkg: String, label: String) -> Unit
+) {
+    val context = LocalContext.current
+    val apps = remember { queryLaunchableApps(context) }
+    var search by remember { mutableStateOf("") }
+
+    val filtered = remember(search, apps) {
+        val q = search.trim().lowercase()
+        if (q.isEmpty()) apps
+        else apps.filter { it.label.lowercase().contains(q) || it.packageName.lowercase().contains(q) }
+    }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        focusedBorderColor = AccentGreen,
+        unfocusedBorderColor = CardBorder,
+        focusedLabelColor = AccentGreen,
+        unfocusedLabelColor = TextSecondary,
+        cursorColor = AccentGreen
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardSurface,
+        title = { Text("Выбор приложения", color = TextPrimary, fontSize = 16.sp) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    label = { Text("Поиск") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(320.dp)
+                ) {
+                    items(filtered, key = { it.packageName }) { app ->
+                        val selected = app.packageName == currentPackage
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(app.packageName, app.label) }
+                                .background(if (selected) AccentGreen.copy(alpha = 0.1f) else Color.Transparent)
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(app.label, fontSize = 14.sp, color = TextPrimary, maxLines = 1)
+                                Text(app.packageName, fontSize = 11.sp, color = TextMuted, maxLines = 1)
+                            }
+                        }
+                    }
+                    if (filtered.isEmpty()) {
+                        item {
+                            Text("Ничего не найдено", color = TextMuted, fontSize = 13.sp, modifier = Modifier.padding(8.dp))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть", color = TextSecondary) }
+        }
+    )
+}
+
+private fun queryLaunchableApps(context: android.content.Context): List<InstalledApp> {
+    val pm = context.packageManager
+    val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+        addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+    }
+    val resolved = pm.queryIntentActivities(intent, 0)
+    val self = context.packageName
+    return resolved
+        .map { InstalledApp(it.activityInfo.packageName, it.loadLabel(pm).toString()) }
+        .filter { it.packageName != self }
+        .distinctBy { it.packageName }
+        .sortedBy { it.label.lowercase() }
 }
 
 @Composable

@@ -426,3 +426,27 @@ fun ActionDef.withNotification(title: String, text: String): ActionDef = copy(
         put("text", text)
     }.toString()
 )
+
+// --- App launch helpers (v2.3.0) ---
+
+fun newAppLaunchAction(): ActionDef = ActionDef(
+    command = "",
+    displayName = "Запуск приложения",
+    kind = "app_launch",
+    payload = """{"packageName":"","appLabel":""}"""
+)
+
+fun ActionDef.appLaunchPackageName(): String = try {
+    org.json.JSONObject(payload ?: "{}").optString("packageName")
+} catch (e: Exception) { "" }
+
+fun ActionDef.appLaunchLabel(): String = try {
+    org.json.JSONObject(payload ?: "{}").optString("appLabel")
+} catch (e: Exception) { "" }
+
+fun ActionDef.withAppLaunch(packageName: String, appLabel: String): ActionDef = copy(
+    payload = org.json.JSONObject().apply {
+        put("packageName", packageName)
+        put("appLabel", appLabel)
+    }.toString()
+)
