@@ -154,9 +154,30 @@ DiPlus sendCmd API           ←  AutomationEngine   ←  Rules (Room DB)
 
 ## Установка
 
-### 1. Подготовка DiLink
+### 1. Активация ADB (опционально)
 
-На головном устройстве должен быть установлен **[DiPlus (D+)](https://drive.google.com/file/d/1ndKgzh-HWRPrPw2eTbKh9pwhdDwYJ0Ug/view?usp=drive_link)** — приложение-мост для доступа к данным автомобиля. Установка через ADB:
+ADB нужен, только если вы хотите устанавливать APK через `adb install` или дёргать систему командами. **Для обычной установки D+ и BYDMate ADB не требуется** — достаточно файлового менеджера или флешки (см. шаг 2).
+
+- **DiLink 3 / 4** — можно включить самостоятельно: установите [BydDevelopmentTools](https://disk.yandex.by/d/e3gEnY9P2Y9_fQ), зайдите в *Настройки → Version Management*, 10 раз тапните по тексту *Reset to factory default*, активируйте *Debug Mode when USB is Connected* и *Wireless adb debug switch*. На обновлённых прошивках DiLink 3/4 ADB может быть так же закрыт, как на DiLink 5 — тогда придётся идти по пути ниже.
+- **DiLink 5.0** — ADB-отладка **заблокирована** и открывается только удалённо из Китая. Сделать это можно через продавцов на **TaoBao** (поиск по `DiLink 5.0`, ~40 ¥ внутри Китая / ~80 ¥ извне, оплата через AliPay). Продавец удалённо открывает инженерное меню по присланному QR-коду, после чего ADB включается штатно.
+
+  Подробные инструкции:
+  - [PDF-гайд (русский)](docs/guides/dilink5-adb-activation-ru.pdf) — пошагово, с продавцом на TaoBao (приложен в репозитории)
+  - [Пост на Drive2](https://www.drive2.ru/b/710704251180961065/) — реальный опыт с оплатой и QR-кодом
+  - [Управление BYD c помощью Алисы. Часть 1. ADB](https://www.drive2.ru/l/721494033662226750/) — обзор отличий DiLink 4 и 5
+
+### 2. Установка DiPlus (D+)
+
+На головном устройстве должен быть установлен **[DiPlus (D+)](https://drive.google.com/file/d/1ndKgzh-HWRPrPw2eTbKh9pwhdDwYJ0Ug/view?usp=drive_link)** — приложение-мост для доступа к данным автомобиля.
+
+Самый простой способ (без ADB):
+
+1. Скачайте APK по ссылке выше
+2. Перенесите на USB-флешку (или скачайте напрямую через браузер DiLink)
+3. Откройте файл через файловый менеджер DiLink и установите
+4. Разрешите установку из неизвестных источников, если потребуется
+
+Альтернативно через ADB (если активирован на шаге 1):
 
 ```bash
 adb connect <IP-адрес DiLink>:5555
@@ -165,20 +186,20 @@ adb install DiPlus.apk
 
 IP-адрес DiLink можно найти в настройках Wi-Fi на головном устройстве.
 
-### 2. Установка BYDMate
+### 3. Установка BYDMate
 
 1. Скачайте BYDMate APK из [**Releases**](https://github.com/AndyShaman/BYDMate/releases)
 2. Перенесите на DiLink: через USB-флешку, по сети, или через ADB (`adb install BYDMate.apk`)
 3. Разрешите установку из неизвестных источников, если потребуется
 
-### 3. Первый запуск
+### 4. Первый запуск
 
 1. Откройте BYDMate — появится мастер настройки
 2. Выдайте разрешения на **локацию** и **хранилище** (для GPS и чтения energydata)
 3. Укажите **тарифы** на электроэнергию (для расчёта стоимости поездок)
 4. Скопируйте команду автозапуска D+ — вставьте в терминал DiLink (один раз)
 
-### 4. Фоновая работа
+### 5. Фоновая работа
 
 **Важно:** отключите "Disable background Apps" для BYDMate, иначе DiLink будет убивать приложение:
 
@@ -186,7 +207,7 @@ IP-адрес DiLink можно найти в настройках Wi-Fi на г
 
 *DiLink > Settings > General > Disable background Apps > BYDMate = **OFF***
 
-### 5. Настройка (опционально)
+### 6. Настройка (опционально)
 
 В **Настройках** можно изменить:
 - **Ёмкость батареи** — по умолчанию 72.9 кВт·ч (Leopard 3)
@@ -288,11 +309,12 @@ No OBD adapter needed. No cloud/server — everything stays on the head unit (ex
 
 ### Installation
 
-1. Install **[DiPlus (D+)](https://drive.google.com/file/d/1ndKgzh-HWRPrPw2eTbKh9pwhdDwYJ0Ug/view?usp=drive_link)** on your DiLink head unit (requires ADB)
-2. Download BYDMate APK from [Releases](https://github.com/AndyShaman/BYDMate/releases)
-3. Transfer to DiLink via USB and install
-4. Grant location + storage permissions
-5. Disable "Disable background Apps" for BYDMate in DiLink Settings
+1. *(Optional)* Enable ADB on your head unit. Not required for installing D+ or BYDMate — only needed if you want to push APKs via `adb install`. On DiLink 3/4 you can enable it yourself; on **DiLink 5.0** ADB is locked and must be unlocked remotely from China via TaoBao sellers (~40–80 ¥). See [PDF guide (RU)](docs/guides/dilink5-adb-activation-ru.pdf) included in the repo.
+2. Install **[DiPlus (D+)](https://drive.google.com/file/d/1ndKgzh-HWRPrPw2eTbKh9pwhdDwYJ0Ug/view?usp=drive_link)** on your DiLink head unit — copy the APK via USB stick and open it in the file manager (no ADB needed).
+3. Download BYDMate APK from [Releases](https://github.com/AndyShaman/BYDMate/releases)
+4. Transfer to DiLink via USB and install
+5. Grant location + storage permissions
+6. Disable "Disable background Apps" for BYDMate in DiLink Settings
 
 ### AI Insights
 
