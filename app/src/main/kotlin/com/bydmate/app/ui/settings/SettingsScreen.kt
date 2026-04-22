@@ -36,6 +36,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -352,6 +354,7 @@ fun SettingsScreen(
                 val widgetCtx = LocalContext.current
                 val widgetPrefs = remember { WidgetPreferences(widgetCtx) }
                 val widgetEnabled by widgetPrefs.enabledFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.isEnabled())
+                val widgetAlpha by widgetPrefs.alphaFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getAlpha())
 
                 SectionHeader(text = "Плавающий виджет")
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 0.dp, vertical = 0.dp)) {
@@ -409,6 +412,38 @@ fun SettingsScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = CardSurface),
                             ) {
                                 Text("Сбросить позицию", fontSize = 13.sp, color = TextPrimary)
+                            }
+                            Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Прозрачность",
+                                        color = TextPrimary,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Text(
+                                        text = "${(widgetAlpha * 100).toInt()}%",
+                                        color = TextMuted,
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                }
+                                Slider(
+                                    value = widgetAlpha,
+                                    onValueChange = { widgetPrefs.setAlpha(it) },
+                                    valueRange = 0.3f..1.0f,
+                                    enabled = widgetEnabled,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = AccentGreen,
+                                        activeTrackColor = AccentGreen,
+                                        inactiveTrackColor = TextMuted.copy(alpha = 0.3f),
+                                        disabledThumbColor = TextMuted,
+                                        disabledActiveTrackColor = TextMuted.copy(alpha = 0.4f),
+                                    ),
+                                )
                             }
                         }
                     }
