@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -68,6 +69,7 @@ import com.bydmate.app.data.remote.OpenRouterModel
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.theme.*
+import com.bydmate.app.util.AppForegroundWatcher
 
 private val PrimaryColor = AccentGreen
 
@@ -85,7 +87,7 @@ fun SettingsScreen(
             "dc" -> state.dcTariff
             else -> state.tripCostTariff
         }
-        androidx.compose.material3.AlertDialog(
+        AlertDialog(
             onDismissRequest = { viewModel.hideRecalcConfirm() },
             title = { Text("Пересчитать стоимость?", color = TextPrimary) },
             text = {
@@ -355,6 +357,9 @@ fun SettingsScreen(
                 val widgetPrefs = remember { WidgetPreferences(widgetCtx) }
                 val widgetEnabled by widgetPrefs.enabledFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.isEnabled())
                 val widgetAlpha by widgetPrefs.alphaFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getAlpha())
+                val widgetBlocklist by widgetPrefs.blocklistFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getBlocklist())
+                var showBlocklistPicker by remember { mutableStateOf(false) }
+                val hasUsagePermission = remember(widgetEnabled) { AppForegroundWatcher.hasPermission(widgetCtx) }
 
                 SectionHeader(text = "Плавающий виджет")
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 0.dp, vertical = 0.dp)) {
@@ -443,6 +448,82 @@ fun SettingsScreen(
                                         disabledThumbColor = TextMuted,
                                         disabledActiveTrackColor = TextMuted.copy(alpha = 0.4f),
                                     ),
+                                )
+                            }
+                            Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                Text(
+                                    text = "Скрывать в приложениях",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = "Виджет не будет показываться поверх выбранных приложений. По умолчанию — YouTube и Настройки DiLink.",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+                                )
+                                if (!hasUsagePermission) {
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = SocYellow.copy(alpha = 0.15f)),
+                                        shape = RoundedCornerShape(8.dp),
+                                    ) {
+                                        Column(Modifier.padding(8.dp)) {
+                                            Text(
+                                                text = "Требуется доступ к истории использования.",
+                                                color = SocYellow,
+                                                fontSize = 12.sp,
+                                            )
+                                            TextButton(
+                                                onClick = {
+                                                    val intent = Intent(AndroidSettings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                    widgetCtx.startActivity(intent)
+                                                }
+                                            ) {
+                                                Text("Открыть настройки", color = AccentGreen, fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                                widgetBlocklist.forEach { pkg ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = pkg,
+                                            color = TextPrimary,
+                                            fontSize = 12.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        TextButton(
+                                            onClick = { widgetPrefs.setBlocklist(widgetBlocklist - pkg) }
+                                        ) {
+                                            Text("Убрать", color = SocRed, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                                Button(
+                                    onClick = { showBlocklistPicker = true },
+                                    enabled = widgetEnabled,
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = CardSurface),
+                                ) {
+                                    Text("Добавить приложение", fontSize = 12.sp, color = TextPrimary)
+                                }
+                            }
+
+                            if (showBlocklistPicker) {
+                                BlocklistPickerDialog(
+                                    current = widgetBlocklist,
+                                    onDismiss = { showBlocklistPicker = false },
+                                    onSelect = { pkg ->
+                                        widgetPrefs.setBlocklist(widgetBlocklist + pkg)
+                                        showBlocklistPicker = false
+                                    },
                                 )
                             }
                         }
@@ -841,4 +922,94 @@ private fun ModelPickerDialog(
             }
         }
     }
+}
+
+@Composable
+private fun BlocklistPickerDialog(
+    current: Set<String>,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val apps = remember { queryLaunchableApps(context) }
+    var search by remember { mutableStateOf("") }
+
+    val filtered = remember(search, apps) {
+        val q = search.trim().lowercase()
+        if (q.isEmpty()) apps
+        else apps.filter { it.label.lowercase().contains(q) || it.packageName.lowercase().contains(q) }
+    }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        focusedBorderColor = AccentGreen,
+        unfocusedBorderColor = CardBorder,
+        cursorColor = AccentGreen,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardSurface,
+        title = { Text("Выбор приложения", color = TextPrimary, fontSize = 16.sp) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    label = { Text("Поиск") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().height(320.dp),
+                ) {
+                    items(filtered, key = { it.packageName }) { app ->
+                        val already = app.packageName in current
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !already) { onSelect(app.packageName) }
+                                .background(if (already) AccentGreen.copy(alpha = 0.1f) else Color.Transparent)
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(app.label, fontSize = 14.sp, color = TextPrimary, maxLines = 1)
+                                Text(app.packageName, fontSize = 11.sp, color = TextMuted, maxLines = 1)
+                            }
+                            if (already) {
+                                Text("уже в списке", color = TextMuted, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    if (filtered.isEmpty()) {
+                        item {
+                            Text("Ничего не найдено", color = TextMuted, fontSize = 13.sp, modifier = Modifier.padding(8.dp))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть", color = TextSecondary) }
+        },
+    )
+}
+
+private data class InstalledApp(val packageName: String, val label: String)
+
+private fun queryLaunchableApps(context: android.content.Context): List<InstalledApp> {
+    val pm = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+    val resolved = pm.queryIntentActivities(intent, 0)
+    val self = context.packageName
+    return resolved
+        .map { InstalledApp(it.activityInfo.packageName, it.loadLabel(pm).toString()) }
+        .filter { it.packageName != self }
+        .distinctBy { it.packageName }
+        .sortedBy { it.label.lowercase() }
 }
