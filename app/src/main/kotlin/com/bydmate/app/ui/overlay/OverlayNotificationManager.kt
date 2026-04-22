@@ -21,13 +21,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.savedstate.SavedStateRegistry
-import androidx.savedstate.SavedStateRegistryController
-import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.bydmate.app.ui.theme.AccentGreen
 import com.bydmate.app.ui.theme.CardBorder
@@ -147,22 +141,5 @@ object OverlayNotificationManager {
         } catch (e: Exception) {
             Log.w(TAG, "sound failed: ${e.message}")
         }
-    }
-}
-
-private class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner {
-    private val lifecycleRegistry = LifecycleRegistry(this)
-    private val savedStateController = SavedStateRegistryController.create(this)
-
-    override val lifecycle: Lifecycle get() = lifecycleRegistry
-    override val savedStateRegistry: SavedStateRegistry get() = savedStateController.savedStateRegistry
-
-    fun onCreate() {
-        savedStateController.performRestore(null)
-        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
-    }
-
-    fun onDestroy() {
-        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
     }
 }
