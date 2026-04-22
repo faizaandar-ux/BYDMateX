@@ -27,15 +27,20 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.compose.ui.platform.LocalContext
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.battery.BatteryHealthScreen
 import com.bydmate.app.ui.automation.AutomationScreen
 import com.bydmate.app.ui.places.PlacesScreen
 import com.bydmate.app.ui.dashboard.DashboardScreen
 import com.bydmate.app.ui.settings.SettingsScreen
+import com.bydmate.app.ui.settings.UpdateDialog
+import com.bydmate.app.ui.settings.UpdateState
 import com.bydmate.app.ui.theme.*
 import com.bydmate.app.ui.trips.TripsScreen
 import com.bydmate.app.ui.welcome.WelcomeScreen
+import kotlinx.coroutines.delay
 
 enum class Screen(val route: String, val label: String, val icon: ImageVector) {
     Dashboard("dashboard", "Главная", Icons.Outlined.Home),
@@ -46,7 +51,8 @@ enum class Screen(val route: String, val label: String, val icon: ImageVector) {
 
 @Composable
 fun AppNavigation(
-    settingsRepository: SettingsRepository
+    settingsRepository: SettingsRepository,
+    updateChecker: UpdateChecker
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -59,6 +65,38 @@ fun AppNavigation(
     }
 
     if (startDestination == null) return // Loading
+
+    // Автоматическая проверка обновлений: через 30с после открытия приложения
+    // дёргаем GitHub, если включено в настройках и есть новая версия —
+    // показываем стандартный UpdateDialog.
+    val autoCheckContext = LocalContext.current
+    var autoUpdateInfo by remember { mutableStateOf<UpdateChecker.UpdateInfo?>(null) }
+    LaunchedEffect(Unit) {
+        delay(30_000L)
+        if (!UpdateChecker.isAutoCheckEnabled(autoCheckContext)) return@LaunchedEffect
+        try {
+            autoUpdateInfo = updateChecker.checkForUpdate(autoCheckContext, forceCheck = false)
+        } catch (_: Exception) {
+            // тихо игнорируем — оффлайн, rate-limit и т.п.
+        }
+    }
+    autoUpdateInfo?.let { info ->
+        val currentVersion = runCatching {
+            autoCheckContext.packageManager.getPackageInfo(autoCheckContext.packageName, 0).versionName ?: "?"
+        }.getOrDefault("?")
+        UpdateDialog(
+            currentVersion = currentVersion,
+            state = UpdateState.Available(version = info.version, notes = info.releaseNotes),
+            onCheck = {
+                navController.navigate(Screen.Settings.route) {
+                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                }
+                autoUpdateInfo = null
+            },
+            onDismiss = { autoUpdateInfo = null }
+        )
+    }
 
     val isWelcome = currentDestination?.route == "welcome"
 

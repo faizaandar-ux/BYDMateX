@@ -25,7 +25,17 @@ class UpdateChecker @Inject constructor(
         private const val GITHUB_API = "https://api.github.com/repos/AndyShaman/BYDMate/releases/latest"
         private const val PREFS_NAME = "update_prefs"
         private const val KEY_LAST_CHECK = "last_check"
+        private const val KEY_AUTO_CHECK = "auto_check_enabled"
         private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L // 24 hours
+
+        fun isAutoCheckEnabled(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_AUTO_CHECK, true)
+
+        fun setAutoCheckEnabled(context: Context, enabled: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_AUTO_CHECK, enabled).apply()
+        }
     }
 
     data class UpdateInfo(

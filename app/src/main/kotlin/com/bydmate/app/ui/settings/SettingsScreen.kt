@@ -558,13 +558,32 @@ fun SettingsScreen(
                             }
                         )
 
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Проверять обновления", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(
+                                    "Через 30 секунд после запуска проверять GitHub и предлагать обновиться",
+                                    color = TextSecondary, fontSize = 12.sp
+                                )
+                            }
+                            Switch(
+                                checked = state.autoCheckUpdates,
+                                onCheckedChange = { viewModel.setAutoCheckUpdates(it) },
+                                colors = bydSwitchColors(),
+                            )
+                        }
+
                         Button(
                             onClick = { viewModel.showUpdateDialog() },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = Color.White)
                         ) {
-                            Text("Проверить обновления", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text("Проверить обновления сейчас", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         }
                     }
                 }

@@ -73,7 +73,7 @@ fun formatDuration(startTs: Long, endTs: Long): String {
     val durationMs = endTs - startTs
     val hours = TimeUnit.MILLISECONDS.toHours(durationMs)
     val minutes = TimeUnit.MILLISECONDS.toMinutes(durationMs) % 60
-    return if (hours > 0) "${hours}ч ${minutes}м" else "${minutes}м"
+    return if (hours > 0) "$hours ч $minutes мин" else "$minutes мин"
 }
 
 // Единый стиль Switch по всему приложению:

@@ -12,6 +12,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.service.TrackingService
+import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.navigation.AppNavigation
 import com.bydmate.app.ui.theme.BYDMateTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -21,6 +22,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var updateChecker: UpdateChecker
 
     companion object {
         private const val TAG = "MainActivity"
@@ -35,7 +37,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             BYDMateTheme {
-                AppNavigation(settingsRepository = settingsRepository)
+                AppNavigation(
+                    settingsRepository = settingsRepository,
+                    updateChecker = updateChecker,
+                )
             }
         }
     }

@@ -79,7 +79,8 @@ data class SettingsUiState(
     val aliceEndpoint: String = "",
     val aliceApiKey: String = "",
     val aliceEnabled: Boolean = false,
-    val aliceSaveStatus: String? = null
+    val aliceSaveStatus: String? = null,
+    val autoCheckUpdates: Boolean = true
 )
 
 @HiltViewModel
@@ -98,7 +99,8 @@ class SettingsViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState(
-        appVersion = getVersion()
+        appVersion = getVersion(),
+        autoCheckUpdates = UpdateChecker.isAutoCheckEnabled(appContext)
     ))
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
@@ -693,6 +695,11 @@ class SettingsViewModel @Inject constructor(
 
     fun hideUpdateDialog() {
         _uiState.update { it.copy(showUpdateDialog = false) }
+    }
+
+    fun setAutoCheckUpdates(enabled: Boolean) {
+        UpdateChecker.setAutoCheckEnabled(appContext, enabled)
+        _uiState.update { it.copy(autoCheckUpdates = enabled) }
     }
 
     /** Check for app updates on GitHub. */
