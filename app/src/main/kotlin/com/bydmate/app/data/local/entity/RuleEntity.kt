@@ -18,6 +18,7 @@ data class RuleEntity(
     @ColumnInfo(name = "cooldown_seconds") val cooldownSeconds: Int = 60,
     @ColumnInfo(name = "require_park") val requirePark: Boolean = false,
     @ColumnInfo(name = "confirm_before_execute") val confirmBeforeExecute: Boolean = false,
+    @ColumnInfo(name = "fire_once_per_trip", defaultValue = "0") val fireOncePerTrip: Boolean = false,
     @ColumnInfo(name = "last_triggered_at") val lastTriggeredAt: Long? = null,
     @ColumnInfo(name = "trigger_count") val triggerCount: Int = 0,
     @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis()

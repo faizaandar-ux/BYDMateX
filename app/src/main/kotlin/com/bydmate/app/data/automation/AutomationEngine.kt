@@ -57,6 +57,8 @@ class AutomationEngine @Inject constructor(
     private val pendingConfirmations = ConcurrentHashMap<Int, PendingAction>()
     // Edge triggering: only fire when condition transitions from false→true
     private val lastEvalResults = ConcurrentHashMap<Long, Boolean>()
+    // Once-per-trip gate: ruleId -> tripStartedAt captured when rule last fired
+    private val lastFiredTripByRule = ConcurrentHashMap<Long, Long>()
 
     private data class PendingAction(
         val rule: RuleEntity,
@@ -98,11 +100,19 @@ class AutomationEngine @Inject constructor(
                 if (previous == null) continue          // first observation — seed only, do not fire
                 if (!matched || previous) continue       // edge trigger: fire only on false→true
 
+                // Once-per-trip gate: skip if already fired in the current trip
+                val currentTripStart = TrackingService.tripStartedAt.value
+                if (rule.fireOncePerTrip && currentTripStart != null &&
+                    lastFiredTripByRule[rule.id] == currentTripStart) continue
+
                 val actions = ActionDef.listFromJson(rule.actions)
                 if (actions.isEmpty()) continue
 
                 // Mark triggered immediately to prevent re-fire
                 ruleDao.updateLastTriggered(rule.id, now)
+                if (rule.fireOncePerTrip && currentTripStart != null) {
+                    lastFiredTripByRule[rule.id] = currentTripStart
+                }
 
                 val snapshot = buildSnapshot(triggers, data)
 

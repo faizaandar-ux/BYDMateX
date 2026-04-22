@@ -155,6 +155,7 @@ data class EditingRule(
     val cooldownSeconds: Int = 60,
     val requirePark: Boolean = false,
     val confirmBeforeExecute: Boolean = false,
+    val fireOncePerTrip: Boolean = false,
     val isNew: Boolean = true
 )
 
@@ -236,6 +237,7 @@ class AutomationViewModel @Inject constructor(
                     cooldownSeconds = rule.cooldownSeconds,
                     requirePark = rule.requirePark,
                     confirmBeforeExecute = rule.confirmBeforeExecute,
+                    fireOncePerTrip = rule.fireOncePerTrip,
                     isNew = false
                 )
             )
@@ -312,7 +314,8 @@ class AutomationViewModel @Inject constructor(
             actions = ActionDef.listToJson(e.actions),
             cooldownSeconds = e.cooldownSeconds.coerceAtLeast(30),
             requirePark = e.requirePark,
-            confirmBeforeExecute = e.confirmBeforeExecute
+            confirmBeforeExecute = e.confirmBeforeExecute,
+            fireOncePerTrip = e.fireOncePerTrip,
         )
 
         viewModelScope.launch {

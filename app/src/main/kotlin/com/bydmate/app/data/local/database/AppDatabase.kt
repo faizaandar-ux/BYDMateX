@@ -36,7 +36,7 @@ import com.bydmate.app.data.local.entity.TripPointEntity
         RuleLogEntity::class,
         PlaceEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {

@@ -538,6 +538,15 @@ private fun EditorDialog(
                             colors = bydSwitchColors(),
                         )
                     }
+
+                    // Fire once per trip
+                    SettingRow("Выполнить один раз за поездку") {
+                        Switch(
+                            checked = editing.fireOncePerTrip,
+                            onCheckedChange = { v -> onUpdate { copy(fireOncePerTrip = v) } },
+                            colors = bydSwitchColors(),
+                        )
+                    }
                 }
             }
 
