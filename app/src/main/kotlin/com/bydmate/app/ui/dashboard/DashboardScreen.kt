@@ -143,8 +143,8 @@ fun DashboardScreen(
                         CompactCard(
                             leftValue = state.avgBatTemp?.let { "${it}°C" } ?: "—",
                             leftLabel = "батарея",
-                            rightValue = state.voltage12v?.let { "${"%.1f".format(it)}V" } ?: "—",
-                            rightLabel = "12V",
+                            rightValue = state.voltage12v?.let { "${"%.1f".format(it)} В" } ?: "—",
+                            rightLabel = "бортовая сеть",
                             borderColor = run {
                                 val worst = when {
                                     state.batteryHealthStatus == "critical" || state.voltage12vStatus == "critical" -> "critical"

@@ -283,7 +283,7 @@ private fun TripRow(trip: TripEntity, currencySymbol: String, onClick: () -> Uni
         ) {
             // Time range
             Text(
-                "$time–$endTime",
+                "$time – $endTime",
                 color = if (isStop) TextMuted else TextSecondary,
                 fontSize = 12.sp, fontFamily = FontFamily.Monospace,
                 maxLines = 1,
