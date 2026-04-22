@@ -220,8 +220,9 @@ class TrackingService : Service(), LocationListener {
         Log.i(TAG, "onDestroy: stopping TrackingService")
         com.bydmate.app.ui.widget.WidgetController.detach()
         appendChainLog("TrackingService onDestroy")
-        ConsumptionAggregator.reset()
         pollingJob?.cancel()
+        ConsumptionAggregator.reset()
+        _tripStartedAt.value = null
 
         // Force-end active trip/charge sessions asynchronously
         // Android gives ~5 seconds after onDestroy before killing process

@@ -56,8 +56,10 @@ class BYDMateApp : Application(), Configuration.Provider {
         registerActivityLifecycleCallbacks(WidgetLifecycleCallbacks(this))
 
         // Non-runtime permission — user grants via Settings → Special access.
-        // Watcher self-checks permission; safe to call unconditionally.
-        AppForegroundWatcher.start(this)
+        // Watcher self-checks permission and starts only when widget is enabled.
+        if (WidgetPreferences(this).isEnabled()) {
+            AppForegroundWatcher.start(this)
+        }
     }
 
     private fun initOsmdroid() {

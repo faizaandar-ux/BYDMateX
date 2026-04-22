@@ -95,7 +95,6 @@ fun FloatingWidgetView(
     ) {
         Row1Energy(
             soc = soc,
-            socBorderColor = borderColor,
             rangeKm = rangeKm,
             consumption = consumption,
             trend = trend,
@@ -116,7 +115,6 @@ fun FloatingWidgetView(
 @Composable
 private fun Row1Energy(
     soc: Int?,
-    socBorderColor: Color,
     rangeKm: Double?,
     consumption: Double?,
     trend: Trend,
@@ -136,7 +134,7 @@ private fun Row1Energy(
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
-            color = socBorderColor,
+            color = socColor(soc),
         )
         Text(
             text = rangeKm?.let { "~${"%.0f".format(it)} км" } ?: "~— км",
@@ -296,4 +294,11 @@ private fun severity(s: Status): Int = when (s) {
     Status.OK -> 0
     Status.WARN -> 1
     Status.CRIT -> 2
+}
+
+private fun socColor(soc: Int?): Color = when {
+    soc == null -> TextMuted
+    soc < 15 -> SocRed
+    soc < 30 -> SocYellow
+    else -> AccentGreen
 }

@@ -41,11 +41,15 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.text.font.FontFamily
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -359,7 +363,21 @@ fun SettingsScreen(
                 val widgetAlpha by widgetPrefs.alphaFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getAlpha())
                 val widgetBlocklist by widgetPrefs.blocklistFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getBlocklist())
                 var showBlocklistPicker by remember { mutableStateOf(false) }
-                val hasUsagePermission = remember(widgetEnabled) { AppForegroundWatcher.hasPermission(widgetCtx) }
+                val lifecycleOwner = LocalLifecycleOwner.current
+                var hasUsagePermission by remember { mutableStateOf(AppForegroundWatcher.hasPermission(widgetCtx)) }
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            val granted = AppForegroundWatcher.hasPermission(widgetCtx)
+                            hasUsagePermission = granted
+                            if (granted && widgetPrefs.isEnabled()) {
+                                AppForegroundWatcher.start(widgetCtx)
+                            }
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
 
                 SectionHeader(text = "Плавающий виджет")
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 0.dp, vertical = 0.dp)) {
@@ -388,6 +406,7 @@ fun SettingsScreen(
                                         if (requested) {
                                             if (AndroidSettings.canDrawOverlays(widgetCtx)) {
                                                 widgetPrefs.setEnabled(true)
+                                                AppForegroundWatcher.start(widgetCtx)
                                                 WidgetController.attach(widgetCtx)
                                             } else {
                                                 val intent = Intent(
@@ -398,6 +417,7 @@ fun SettingsScreen(
                                             }
                                         } else {
                                             widgetPrefs.setEnabled(false)
+                                            AppForegroundWatcher.stop()
                                             WidgetController.detach()
                                         }
                                     },
@@ -470,7 +490,7 @@ fun SettingsScreen(
                                     ) {
                                         Column(Modifier.padding(8.dp)) {
                                             Text(
-                                                text = "Требуется доступ к истории использования.",
+                                                text = "Требуется доступ к истории использования.\nСистемные → Специальный доступ → Доступ к истории использования.",
                                                 color = SocYellow,
                                                 fontSize = 12.sp,
                                             )
