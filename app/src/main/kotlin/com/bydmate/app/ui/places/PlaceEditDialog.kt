@@ -27,6 +27,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogProperties
+import android.widget.Toast
 import com.bydmate.app.data.local.entity.PlaceEntity
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.ui.theme.AccentGreen
@@ -92,8 +94,10 @@ fun PlaceEditDialog(
         cursorColor = AccentGreen
     )
 
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnClickOutside = false),
         containerColor = CardSurface,
         title = {
             Text(
@@ -175,7 +179,11 @@ fun PlaceEditDialog(
             TextButton(
                 onClick = {
                     if (canSave) {
-                        val radius = radiusText.toInt().coerceIn(20, 500)
+                        val raw = radiusText.toInt()
+                        if (raw < 20) {
+                            Toast.makeText(context, "Минимальный радиус 20 м", Toast.LENGTH_SHORT).show()
+                        }
+                        val radius = raw.coerceIn(20, 500)
                         onSave(initial?.id, nameText.trim(), latValue!!, lonValue!!, radius)
                     }
                 },

@@ -328,7 +328,10 @@ private fun EditorDialog(
 ) {
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = false
+        )
     ) {
         Column(
             modifier = Modifier
@@ -763,7 +766,7 @@ private fun PlaceTriggerControls(
                         text = { Text(place.name, fontSize = 13.sp) },
                         onClick = {
                             placeExpanded = false
-                            val kindLabel = if (trigger.kind == "place_enter") "Вход в" else "Выход из"
+                            val kindLabel = if (trigger.kind == "place_enter") "Въезд в" else "Выезд из"
                             onUpdate(trigger.copy(
                                 placeId = place.id,
                                 placeName = place.name,
@@ -777,16 +780,16 @@ private fun PlaceTriggerControls(
     }
     Spacer(Modifier.width(4.dp))
 
-    // Kind toggle pill: Войти / Выйти
+    // Kind toggle pill: Въезд / Выезд
     val isEnter = trigger.kind == "place_enter"
-    val label = if (isEnter) "Войти" else "Выйти"
+    val label = if (isEnter) "Въезд" else "Выезд"
     Box(
         modifier = Modifier
             .background(CardSurface, RoundedCornerShape(6.dp))
             .border(1.dp, CardBorder, RoundedCornerShape(6.dp))
             .clickable {
                 val newKind = if (isEnter) "place_exit" else "place_enter"
-                val kindLabel = if (newKind == "place_enter") "Вход в" else "Выход из"
+                val kindLabel = if (newKind == "place_enter") "Въезд в" else "Выезд из"
                 onUpdate(trigger.copy(
                     kind = newKind,
                     displayName = "$kindLabel «${trigger.placeName ?: "?"}»"
@@ -2130,7 +2133,7 @@ private fun newPlaceTrigger(place: PlaceEntity): TriggerDef {
         chineseName = "位置",
         operator = "==",
         value = "enter",
-        displayName = "Вход в «${place.name}»",
+        displayName = "Въезд в «${place.name}»",
         kind = "place_enter",
         placeId = place.id,
         placeName = place.name

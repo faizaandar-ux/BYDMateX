@@ -208,18 +208,12 @@ class AutomationViewModel @Inject constructor(
 
     fun openNewRule() {
         if (_uiState.value.rules.size >= 50) return
-        val defaultParam = TRIGGER_PARAMS.first()
-        val defaultAction = ACTION_COMMANDS.first()
         _uiState.update {
             it.copy(
                 showEditor = true,
                 editing = EditingRule(
-                    triggers = listOf(
-                        TriggerDef(defaultParam.param, defaultParam.chineseName, ">", "0", defaultParam.displayName)
-                    ),
-                    actions = listOf(
-                        ActionDef(defaultAction.command, defaultAction.displayName)
-                    )
+                    triggers = emptyList(),
+                    actions = emptyList()
                 )
             )
         }
