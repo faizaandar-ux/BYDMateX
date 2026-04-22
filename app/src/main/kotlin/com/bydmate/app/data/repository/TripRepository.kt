@@ -92,17 +92,15 @@ class TripRepository @Inject constructor(
         val fromTs = System.currentTimeMillis() - windowDays * 24L * 60L * 60L * 1000L
         val trips = tripDao.getForEmaSince(fromTs)
         if (trips.isEmpty()) return 0.0
-        val ordered = trips.asReversed()
-        val first = ordered.first()
-        var ema = (first.kwhConsumed ?: 0.0) / (first.distanceKm ?: 1.0) * 100.0
-        for (t in ordered.drop(1)) {
+        var ema: Double? = null
+        for (t in trips.asReversed()) {
             val km = t.distanceKm ?: continue
             val kwh = t.kwhConsumed ?: continue
             if (km <= 0.0) continue
             val c = kwh / km * 100.0
-            ema = alpha * c + (1.0 - alpha) * ema
+            ema = if (ema == null) c else alpha * c + (1.0 - alpha) * ema
         }
-        return ema
+        return ema ?: 0.0
     }
 
     private fun invalidateEmaCache() {
