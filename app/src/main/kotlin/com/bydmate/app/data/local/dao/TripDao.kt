@@ -99,6 +99,13 @@ interface TripDao {
         )
     """)
     suspend fun getRecentSummary(maxTrips: Int = 30): TripSummary
+
+    @Query("""
+        SELECT * FROM trips
+        WHERE distance_km >= 2 AND kwh_consumed > 0
+        ORDER BY start_ts DESC LIMIT :limit
+    """)
+    suspend fun getRecentForEma(limit: Int = 20): List<TripEntity>
 }
 
 data class TripSummary(

@@ -345,7 +345,7 @@ fun DashboardScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    StatCard("Пробег", "%.1f км".format(state.totalKm), "${state.tripCount} поездок", AccentGreen, Modifier.weight(1f))
+                    StatCard("Пробег", "%.1f км".format(state.totalKm), "${state.tripCount} поездок", Color.White, Modifier.weight(1f))
                     StatCard("Энергия", "%.1f кВт·ч".format(state.totalKwh), null, AccentBlue, Modifier.weight(1f))
                     val consColor = if (state.avgConsumption > 0) consumptionColor(state.avgConsumption) else TextSecondary
                     StatCard("Расход", if (state.avgConsumption > 0) "%.1f/100".format(state.avgConsumption) else "—", null, consColor, Modifier.weight(1f))

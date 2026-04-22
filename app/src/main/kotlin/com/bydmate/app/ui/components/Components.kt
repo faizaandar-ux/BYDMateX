@@ -209,14 +209,14 @@ fun TripCard(
         // Distance
         Text(
             text = trip.distanceKm?.let { "%.1f".format(it) } ?: "—",
-            color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+            color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium,
             fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f)
         )
 
         // kWh
         Text(
             text = trip.kwhConsumed?.let { "%.1f".format(it) } ?: "—",
-            color = TextSecondary, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+            color = AccentBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
             modifier = Modifier.weight(1f)
         )
 

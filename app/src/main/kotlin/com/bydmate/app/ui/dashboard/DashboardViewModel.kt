@@ -274,7 +274,7 @@ class DashboardViewModel @Inject constructor(
 
     private fun loadRecentAvgConsumption() {
         viewModelScope.launch {
-            recentAvgConsumption = tripRepository.getRecentAvgConsumption()
+            recentAvgConsumption = tripRepository.getEmaConsumption()
             batteryCapacityKwh = settingsRepository.getBatteryCapacity()
             _uiState.update {
                 it.copy(estimatedRangeKm = calculateRange(it.soc, null))

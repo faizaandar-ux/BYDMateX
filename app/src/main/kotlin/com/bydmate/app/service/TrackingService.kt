@@ -68,6 +68,11 @@ class TrackingService : Service(), LocationListener {
     private var firstDataReceived = false
     private var currentPollIntervalMs = POLL_INTERVAL_MS
 
+    // Cached values for range estimation in notification.
+    // Updated at service start + after history sync (new trips → TripRepository invalidates its own EMA cache).
+    @Volatile private var cachedEmaConsumption: Double = 0.0
+    @Volatile private var cachedBatteryCapacity: Double = 72.9
+
     companion object {
         private const val TAG = "TrackingService"
         private const val NOTIFICATION_ID = 1
@@ -103,7 +108,7 @@ class TrackingService : Service(), LocationListener {
         Log.i(TAG, "onCreate: starting TrackingService")
         appendChainLog("TrackingService onCreate")
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
+        startForeground(NOTIFICATION_ID, buildNotification("Запуск…"))
         appendChainLog("startForeground OK")
         acquireWakeLock()
         startLocationUpdates()
@@ -133,6 +138,10 @@ class TrackingService : Service(), LocationListener {
             }
         }
 
+        // Initial load of consumption cache for notification range estimate.
+        // Will also be refreshed after history sync below (if new trips appeared).
+        refreshConsumptionCache()
+
         // v2.0: event-based sync on service start
         serviceScope.launch {
             try {
@@ -149,10 +158,33 @@ class TrackingService : Service(), LocationListener {
                 diPlusDbReader.importChargingLog()
                 // AI insights (once per day)
                 insightsManager.refreshIfNeeded()
+                // After sync (possibly new trips) — refresh EMA for notification
+                refreshConsumptionCache()
             } catch (e: Exception) {
                 Log.w(TAG, "Sync failed: ${e.message}")
             }
         }
+    }
+
+    private fun refreshConsumptionCache() {
+        serviceScope.launch {
+            try {
+                cachedEmaConsumption = tripRepository.getEmaConsumption()
+                cachedBatteryCapacity = settingsRepository.getBatteryCapacity()
+                Log.d(TAG, "Consumption cache: ema=${"%.2f".format(cachedEmaConsumption)} kWh/100km, cap=$cachedBatteryCapacity kWh")
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshConsumptionCache failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun estimateRangeKm(soc: Int?): Double? {
+        val socVal = soc ?: return null
+        if (socVal <= 0) return null
+        val ema = cachedEmaConsumption
+        val cap = cachedBatteryCapacity
+        if (ema <= 0.0 || cap <= 0.0) return null
+        return socVal / 100.0 * cap / ema * 100.0
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -467,11 +499,20 @@ class TrackingService : Service(), LocationListener {
     }
 
     private fun updateNotification(data: DiParsData) {
-        val text = buildString {
-            append("SOC: ${data.soc ?: "?"}% | ${data.speed ?: 0} km/h")
-            data.avgBatTemp?.let { append(" | bat ${it}°C") }
-            data.voltage12v?.let { append(" | 12V: ${"%.1f".format(it)}V") }
+        val parts = mutableListOf<String>()
+
+        // Block 1: запас (SOC + оценка km) + t°бат
+        val socStr = data.soc?.let { "$it%" } ?: "—"
+        val rangeStr = estimateRangeKm(data.soc)?.let { " ~${"%.0f".format(it)} км" } ?: ""
+        val tempStr = data.avgBatTemp?.let { ", t°бат: ${it}°C" } ?: ""
+        parts += "запас: $socStr$rangeStr$tempStr"
+
+        // Block 2: 12V
+        data.voltage12v?.let {
+            parts += "борт.сеть: ${"%.1f".format(it)} В"
         }
+
+        val text = parts.joinToString(" | ")
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildNotification(text))
     }

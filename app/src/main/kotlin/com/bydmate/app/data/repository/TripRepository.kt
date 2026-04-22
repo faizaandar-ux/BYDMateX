@@ -6,6 +6,8 @@ import com.bydmate.app.data.local.dao.TripSummary
 import com.bydmate.app.data.local.entity.TripEntity
 import com.bydmate.app.data.local.entity.TripPointEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -14,9 +16,21 @@ class TripRepository @Inject constructor(
     private val tripDao: TripDao,
     private val tripPointDao: TripPointDao
 ) {
-    suspend fun insertTrip(trip: TripEntity): Long = tripDao.insert(trip)
+    // Cached EMA consumption (kWh/100km). Null = needs recompute.
+    // Shared between DashboardViewModel and TrackingService via @Singleton.
+    @Volatile private var cachedEmaConsumption: Double? = null
+    private val emaMutex = Mutex()
 
-    suspend fun updateTrip(trip: TripEntity) = tripDao.update(trip)
+    suspend fun insertTrip(trip: TripEntity): Long {
+        val id = tripDao.insert(trip)
+        invalidateEmaCache()
+        return id
+    }
+
+    suspend fun updateTrip(trip: TripEntity) {
+        tripDao.update(trip)
+        invalidateEmaCache()
+    }
 
     suspend fun getTripById(id: Long): TripEntity? = tripDao.getById(id)
 
@@ -37,6 +51,38 @@ class TripRepository @Inject constructor(
     suspend fun getRecentAvgConsumption(): Double {
         val summary = tripDao.getRecentSummary()
         return if (summary.totalKm > 0) summary.totalKwh / summary.totalKm * 100.0 else 0.0
+    }
+
+    /**
+     * Exponential Moving Average of consumption (kWh/100km) over recent trips.
+     * Reacts to style/season changes without flipping on outliers.
+     * Formula: ema_n = alpha * trip_n + (1 - alpha) * ema_{n-1}, oldest → newest.
+     * Excludes trips < 2 km (cold-start bias).
+     * Cached via @Singleton; invalidated on insertTrip/updateTrip.
+     */
+    suspend fun getEmaConsumption(alpha: Double = 0.3, limit: Int = 20): Double = emaMutex.withLock {
+        cachedEmaConsumption?.let { return it }
+        val trips = tripDao.getRecentForEma(limit)
+        if (trips.isEmpty()) {
+            cachedEmaConsumption = 0.0
+            return 0.0
+        }
+        val ordered = trips.asReversed()
+        val first = ordered.first()
+        var ema = (first.kwhConsumed ?: 0.0) / (first.distanceKm ?: 1.0) * 100.0
+        for (t in ordered.drop(1)) {
+            val km = t.distanceKm ?: continue
+            val kwh = t.kwhConsumed ?: continue
+            if (km <= 0.0) continue
+            val c = kwh / km * 100.0
+            ema = alpha * c + (1.0 - alpha) * ema
+        }
+        cachedEmaConsumption = ema
+        ema
+    }
+
+    private fun invalidateEmaCache() {
+        cachedEmaConsumption = null
     }
 
     suspend fun insertTripPoints(points: List<TripPointEntity>) =
