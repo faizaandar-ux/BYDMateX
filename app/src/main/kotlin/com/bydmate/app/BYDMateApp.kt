@@ -16,6 +16,7 @@ import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.widget.WidgetController
 import com.bydmate.app.ui.widget.WidgetPreferences
+import com.bydmate.app.util.AppForegroundWatcher
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +54,10 @@ class BYDMateApp : Application(), Configuration.Provider {
         }
         scheduleDataThinning()
         registerActivityLifecycleCallbacks(WidgetLifecycleCallbacks(this))
+
+        // Non-runtime permission — user grants via Settings → Special access.
+        // Watcher self-checks permission; safe to call unconditionally.
+        AppForegroundWatcher.start(this)
     }
 
     private fun initOsmdroid() {

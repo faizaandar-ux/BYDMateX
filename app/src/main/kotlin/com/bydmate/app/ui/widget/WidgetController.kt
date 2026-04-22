@@ -23,9 +23,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import android.view.View
 import com.bydmate.app.domain.calculator.ConsumptionAggregator
 import com.bydmate.app.domain.calculator.ConsumptionState
 import com.bydmate.app.domain.calculator.Trend
+import com.bydmate.app.util.AppForegroundWatcher
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
@@ -55,6 +57,7 @@ object WidgetController {
     private var dataScope: CoroutineScope? = null
     private var dataJob: Job? = null
     private lateinit var prefsAlphaFlow: kotlinx.coroutines.flow.Flow<Float>
+    private lateinit var prefsBlocklistFlow: kotlinx.coroutines.flow.Flow<Set<String>>
 
     // Compose state for the widget data
     private var socState = mutableStateOf<Int?>(null)
@@ -78,6 +81,7 @@ object WidgetController {
 
         val prefs = WidgetPreferences(appCtx)
         prefsAlphaFlow = prefs.alphaFlow()
+        prefsBlocklistFlow = prefs.blocklistFlow()
         val metrics = appCtx.resources.displayMetrics
 
         val widgetWpx = dp(appCtx, WIDGET_WIDTH_DP)
@@ -169,9 +173,12 @@ object WidgetController {
                 TrackingService.lastRangeKm,
                 TrackingService.tripStartedAt,
                 ConsumptionAggregator.state,
-                prefsAlphaFlow,
-            ) { data, range, tripStart, consumption, alpha ->
-                WidgetSnapshot(data, range, tripStart, consumption, alpha)
+                combine(prefsAlphaFlow, prefsBlocklistFlow, AppForegroundWatcher.currentForegroundPackage) {
+                        alpha, blocklist, foreground ->
+                    AlphaAndVisibility(alpha = alpha, hidden = foreground != null && foreground in blocklist)
+                },
+            ) { data, range, tripStart, consumption, av ->
+                WidgetSnapshot(data, range, tripStart, consumption, av.alpha, av.hidden)
             }.collect { snap ->
                 socState.value = snap.data?.soc
                 rangeState.value = snap.range
@@ -182,9 +189,21 @@ object WidgetController {
                 consumptionState.value = snap.consumption.displayValue
                 trendState.value = snap.consumption.trend
                 alphaState.value = snap.alpha
+                applyVisibility(snap.hidden)
             }
         }
     }
+
+    private fun applyVisibility(hidden: Boolean) {
+        val v = widgetView ?: return
+        val desired = if (hidden) View.GONE else View.VISIBLE
+        if (v.visibility != desired) {
+            v.visibility = desired
+            if (hidden) hideTrashZone()
+        }
+    }
+
+    private data class AlphaAndVisibility(val alpha: Float, val hidden: Boolean)
 
     private data class WidgetSnapshot(
         val data: com.bydmate.app.data.remote.DiParsData?,
@@ -192,6 +211,7 @@ object WidgetController {
         val tripStartedAt: Long?,
         val consumption: ConsumptionState,
         val alpha: Float,
+        val hidden: Boolean,
     )
 
     // --- Trash zone ---
