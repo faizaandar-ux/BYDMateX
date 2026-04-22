@@ -81,6 +81,30 @@ class TripRepository @Inject constructor(
         ema
     }
 
+    /**
+     * EMA of consumption (kWh/100km) over trips from the last N days.
+     * Uses the same formula as [getEmaConsumption] but bounded by time window —
+     * reacts to recent driving style / season shifts.
+     *
+     * Returns 0.0 when no eligible trips (cold install, all trips too old).
+     */
+    suspend fun getWeeklyEmaConsumption(windowDays: Int = 7, alpha: Double = 0.3): Double {
+        val fromTs = System.currentTimeMillis() - windowDays * 24L * 60L * 60L * 1000L
+        val trips = tripDao.getForEmaSince(fromTs)
+        if (trips.isEmpty()) return 0.0
+        val ordered = trips.asReversed()
+        val first = ordered.first()
+        var ema = (first.kwhConsumed ?: 0.0) / (first.distanceKm ?: 1.0) * 100.0
+        for (t in ordered.drop(1)) {
+            val km = t.distanceKm ?: continue
+            val kwh = t.kwhConsumed ?: continue
+            if (km <= 0.0) continue
+            val c = kwh / km * 100.0
+            ema = alpha * c + (1.0 - alpha) * ema
+        }
+        return ema
+    }
+
     private fun invalidateEmaCache() {
         cachedEmaConsumption = null
     }

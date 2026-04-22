@@ -106,6 +106,13 @@ interface TripDao {
         ORDER BY start_ts DESC LIMIT :limit
     """)
     suspend fun getRecentForEma(limit: Int = 20): List<TripEntity>
+
+    @Query("""
+        SELECT * FROM trips
+        WHERE distance_km >= 2 AND kwh_consumed > 0 AND start_ts >= :fromTs
+        ORDER BY start_ts DESC
+    """)
+    suspend fun getForEmaSince(fromTs: Long): List<TripEntity>
 }
 
 data class TripSummary(
