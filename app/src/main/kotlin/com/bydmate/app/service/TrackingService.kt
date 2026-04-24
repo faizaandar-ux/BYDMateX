@@ -146,10 +146,21 @@ class TrackingService : Service(), LocationListener {
         sessionPersistence = SessionPersistence(this)
         val restored = sessionPersistence.load()
         if (restored != null) {
-            _sessionStartedAt.value = restored.sessionStartedAt
-            sessionLastActiveTs = restored.lastActiveTs
-            Log.i(TAG, "Restored session: startedAt=${restored.sessionStartedAt}, " +
-                "lastActiveTs=${restored.lastActiveTs}")
+            val nowMs = System.currentTimeMillis()
+            if (restored.isStale(nowMs, SESSION_IDLE_CLOSE_MS)) {
+                // Process was killed inside the 30-sec grace window before idle-close
+                // could fire. Without this guard the next start would render
+                // (now - old sessionStartedAt) as "11 ч 43 мин" trip time.
+                val idleFor = (nowMs - restored.lastActiveTs) / 1000
+                Log.i(TAG, "Discarded stale session: startedAt=${restored.sessionStartedAt}, " +
+                    "idleFor=${idleFor}s (>= ${SESSION_IDLE_CLOSE_MS / 1000}s)")
+                sessionPersistence.clear()
+            } else {
+                _sessionStartedAt.value = restored.sessionStartedAt
+                sessionLastActiveTs = restored.lastActiveTs
+                Log.i(TAG, "Restored session: startedAt=${restored.sessionStartedAt}, " +
+                    "lastActiveTs=${restored.lastActiveTs}")
+            }
         }
 
         startPolling()
