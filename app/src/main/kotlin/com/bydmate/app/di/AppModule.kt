@@ -16,6 +16,9 @@ import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.local.dao.TripPointDao
 import com.bydmate.app.data.local.database.AppDatabase
+import com.bydmate.app.domain.calculator.SocInterpolator
+import com.bydmate.app.domain.calculator.SocInterpolatorPrefs
+import com.bydmate.app.domain.calculator.SocInterpolatorPrefsImpl
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -226,6 +229,21 @@ object AppModule {
     @Provides fun provideRuleLogDao(db: AppDatabase): RuleLogDao = db.ruleLogDao()
     @Provides fun providePlaceDao(db: AppDatabase): PlaceDao = db.placeDao()
     @Provides fun provideOdometerSampleDao(db: AppDatabase): OdometerSampleDao = db.odometerSampleDao()
+
+    @Provides
+    @Singleton
+    fun provideSocInterpolatorPrefs(@ApplicationContext ctx: Context): SocInterpolatorPrefs =
+        SocInterpolatorPrefsImpl(ctx)
+
+    @Provides
+    @Singleton
+    fun provideSocInterpolator(
+        settingsRepository: com.bydmate.app.data.repository.SettingsRepository,
+        prefs: SocInterpolatorPrefs,
+    ): SocInterpolator = SocInterpolator(
+        capacityKwhProvider = { settingsRepository.getBatteryCapacity() },
+        persistence = prefs,
+    )
 
     @Provides
     @Singleton
