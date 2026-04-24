@@ -86,9 +86,6 @@ class TrackingService : Service(), LocationListener {
     // tripTracker.state == DRIVING. Session closes when both are inactive for 30 sec
     // so a short powerState glitch doesn't split one physical trip into two.
     private lateinit var sessionPersistence: SessionPersistence
-    // TODO(Task 6): pendingBaseline + SessionBaseline shim will be removed when TrackingService
-    // is rewired to OdometerConsumptionBuffer. Shim lives in SessionBaselineCompat.kt.
-    @Volatile private var pendingBaseline: SessionBaseline? = null
     @Volatile private var sessionLastActiveTs: Long = 0L
     private var lastSummaryLogTs: Long = 0L
 
@@ -158,13 +155,12 @@ class TrackingService : Service(), LocationListener {
         sessionPersistence = SessionPersistence(this)
         val restored = sessionPersistence.load()
         if (restored != null) {
-            _sessionStartedAt.value = restored.baseline.sessionStartedAt
-            pendingBaseline = restored.baseline
+            _sessionStartedAt.value = restored.sessionStartedAt
             sessionLastActiveTs = restored.lastActiveTs
-            Log.i(TAG, "Restored session: startedAt=${restored.baseline.sessionStartedAt}, " +
-                "mileageStart=${"%.2f".format(restored.baseline.mileageStart)} km, " +
-                "elecStart=${"%.2f".format(restored.baseline.totalElecStart)} kWh, " +
+            Log.i(TAG, "Restored session: startedAt=${restored.sessionStartedAt}, " +
                 "lastActiveTs=${restored.lastActiveTs}")
+            // TODO(Task 7): pass restored.sessionStartedAt to OdometerConsumptionBuffer
+            // so the aggregator can resume cumulative mode from the real ignition-on point.
         }
 
         // Initial load of consumption cache for notification range estimate.
@@ -292,7 +288,6 @@ class TrackingService : Service(), LocationListener {
             sessionLastActiveTs = now
             if (currentSession == null) {
                 _sessionStartedAt.value = now
-                pendingBaseline = null   // fresh session — aggregator will capture
                 Log.i(TAG, "Widget session START at $now (powerOn=$powerOn, driving=$driving)")
             }
         } else if (currentSession != null) {
@@ -300,7 +295,6 @@ class TrackingService : Service(), LocationListener {
             if (idleFor >= SESSION_IDLE_CLOSE_MS) {
                 Log.i(TAG, "Widget session END (idle ${idleFor / 1000}s, powerOn=$powerOn, driving=$driving)")
                 _sessionStartedAt.value = null
-                pendingBaseline = null
                 sessionPersistence.clear()
             }
             // else: grace period — keep session alive through brief blip
