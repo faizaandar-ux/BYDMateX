@@ -16,6 +16,7 @@ import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.local.dao.TripPointDao
 import com.bydmate.app.data.local.database.AppDatabase
+import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
 import com.bydmate.app.domain.calculator.SocInterpolator
 import com.bydmate.app.domain.calculator.SocInterpolatorPrefs
 import com.bydmate.app.domain.calculator.SocInterpolatorPrefsImpl
@@ -229,6 +230,16 @@ object AppModule {
     @Provides fun provideRuleLogDao(db: AppDatabase): RuleLogDao = db.ruleLogDao()
     @Provides fun providePlaceDao(db: AppDatabase): PlaceDao = db.placeDao()
     @Provides fun provideOdometerSampleDao(db: AppDatabase): OdometerSampleDao = db.odometerSampleDao()
+
+    @Provides
+    @Singleton
+    fun provideOdometerConsumptionBuffer(
+        dao: OdometerSampleDao,
+        tripRepository: com.bydmate.app.data.repository.TripRepository,
+    ): OdometerConsumptionBuffer = OdometerConsumptionBuffer(
+        dao = dao,
+        fallbackEmaProvider = { tripRepository.getEmaConsumption() },
+    )
 
     @Provides
     @Singleton
