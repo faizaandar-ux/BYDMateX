@@ -35,8 +35,8 @@ class SettingsRepository @Inject constructor(
         const val KEY_DATA_SOURCE = "data_source"
 
         const val DEFAULT_BATTERY_CAPACITY = "72.9"
-        const val DEFAULT_HOME_TARIFF = "0.30"
-        const val DEFAULT_DC_TARIFF = "0.50"
+        const val DEFAULT_HOME_TARIFF = "0.20"
+        const val DEFAULT_DC_TARIFF = "0.77"
         const val DEFAULT_UNITS = "km"
         const val DEFAULT_CURRENCY = "BYN"
         const val DEFAULT_CONSUMPTION_GOOD = "20"
@@ -69,10 +69,10 @@ class SettingsRepository @Inject constructor(
         getString(KEY_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY).toDoubleOrNull() ?: 72.9
 
     suspend fun getHomeTariff(): Double =
-        getString(KEY_HOME_TARIFF, DEFAULT_HOME_TARIFF).toDoubleOrNull() ?: 0.30
+        getString(KEY_HOME_TARIFF, DEFAULT_HOME_TARIFF).toDoubleOrNull() ?: 0.20
 
     suspend fun getDcTariff(): Double =
-        getString(KEY_DC_TARIFF, DEFAULT_DC_TARIFF).toDoubleOrNull() ?: 0.50
+        getString(KEY_DC_TARIFF, DEFAULT_DC_TARIFF).toDoubleOrNull() ?: 0.77
 
     suspend fun getCurrency(): Currency {
         val code = getString(KEY_CURRENCY, DEFAULT_CURRENCY)
