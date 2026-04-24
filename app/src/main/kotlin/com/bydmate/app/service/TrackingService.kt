@@ -29,6 +29,9 @@ import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.ChargeState
 import com.bydmate.app.domain.tracker.TripTracker
 import com.bydmate.app.domain.calculator.ConsumptionAggregator
+import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
+import com.bydmate.app.domain.calculator.SocInterpolator
+import com.bydmate.app.domain.calculator.RangeCalculator
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -60,6 +63,9 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var insightsManager: com.bydmate.app.data.remote.InsightsManager
     @Inject lateinit var automationEngine: AutomationEngine
     @Inject lateinit var alicePollingManager: AlicePollingManager
+    @Inject lateinit var odometerBuffer: OdometerConsumptionBuffer
+    @Inject lateinit var socInterpolator: SocInterpolator
+    @Inject lateinit var rangeCalculator: RangeCalculator
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -68,18 +74,6 @@ class TrackingService : Service(), LocationListener {
     private var consecutiveNullCount = 0
     private var firstDataReceived = false
     private var currentPollIntervalMs = POLL_INTERVAL_MS
-
-    // Cached values for range estimation in notification + floating widget.
-    // Refreshed at service start, after history sync, AND periodically every
-    // [CACHE_REFRESH_INTERVAL_MS] inside the polling loop so a Settings change
-    // (battery capacity, data source) or a newly-finalised trip invalidating
-    // TripRepository's own EMA cache propagates to the widget without waiting
-    // for the next service restart. Dashboard already re-reads on every tab
-    // switch — this periodic refresh keeps the widget in sync with it.
-    @Volatile private var cachedEmaConsumption: Double = 0.0
-    @Volatile private var cachedBaselineEma: Double = 0.0
-    @Volatile private var cachedBatteryCapacity: Double = 72.9
-    @Volatile private var lastCacheRefreshTs: Long = 0L
 
     // Widget session (ignition-on → ignition-off) — decoupled from TripTracker GPS state.
     // Primary signal: DiPars powerState ≥ 1. Fallback when powerState is unreliable:
@@ -102,9 +96,6 @@ class TrackingService : Service(), LocationListener {
         private const val SESSION_IDLE_CLOSE_MS = 30_000L
         // Throttle for the periodic INFO summary so logcat doesn't get flooded.
         private const val SUMMARY_LOG_INTERVAL_MS = 60_000L
-        // Re-read battery capacity + EMA this often from Settings/TripRepository.
-        // TripRepository caches EMA in-memory so hits are cheap; Settings is Room.
-        private const val CACHE_REFRESH_INTERVAL_MS = 30_000L
 
         private val _lastData = MutableStateFlow<DiParsData?>(null)
         val lastData: StateFlow<DiParsData?> = _lastData
@@ -159,13 +150,7 @@ class TrackingService : Service(), LocationListener {
             sessionLastActiveTs = restored.lastActiveTs
             Log.i(TAG, "Restored session: startedAt=${restored.sessionStartedAt}, " +
                 "lastActiveTs=${restored.lastActiveTs}")
-            // TODO(Task 7): pass restored.sessionStartedAt to OdometerConsumptionBuffer
-            // so the aggregator can resume cumulative mode from the real ignition-on point.
         }
-
-        // Initial load of consumption cache for notification range estimate.
-        // Will also be refreshed after history sync below (if new trips appeared).
-        refreshConsumptionCache()
 
         startPolling()
         _isRunning.value = true
@@ -202,55 +187,10 @@ class TrackingService : Service(), LocationListener {
                 diPlusDbReader.importChargingLog()
                 // AI insights (once per day)
                 insightsManager.refreshIfNeeded()
-                // After sync (possibly new trips) — refresh EMA for notification
-                refreshConsumptionCache()
             } catch (e: Exception) {
                 Log.w(TAG, "Sync failed: ${e.message}")
             }
         }
-    }
-
-    private fun refreshConsumptionCache() {
-        serviceScope.launch { doRefreshConsumptionCache() }
-    }
-
-    /**
-     * In-polling periodic refresh: same as [refreshConsumptionCache] but runs
-     * inline on the existing polling coroutine (no extra launch) and is throttled
-     * to [CACHE_REFRESH_INTERVAL_MS]. Keeps the widget range in sync with the
-     * Dashboard — previously the widget cached values from service-start only
-     * and drifted when the user changed battery capacity / data source in
-     * Settings or a new trip finalised and shifted EMA.
-     */
-    private suspend fun maybeRefreshConsumptionCache(now: Long) {
-        if (now - lastCacheRefreshTs < CACHE_REFRESH_INTERVAL_MS) return
-        lastCacheRefreshTs = now
-        doRefreshConsumptionCache()
-    }
-
-    private suspend fun doRefreshConsumptionCache() {
-        try {
-            cachedEmaConsumption = tripRepository.getEmaConsumption()
-            // Baseline for widget trend: last 10 trips >= 1 km; fallback to weekly
-            // EMA when < 3 eligible trips (cold install / sparse history).
-            val recent = tripRepository.getRecentTripsEmaConsumption()
-            cachedBaselineEma = if (recent > 0.01) recent
-                else tripRepository.getWeeklyEmaConsumption()
-            cachedBatteryCapacity = settingsRepository.getBatteryCapacity()
-            Log.d(TAG, "Consumption cache: ema=${"%.2f".format(cachedEmaConsumption)} kWh/100km, " +
-                "baseline=${"%.2f".format(cachedBaselineEma)} kWh/100km, cap=$cachedBatteryCapacity kWh")
-        } catch (e: Exception) {
-            Log.w(TAG, "refreshConsumptionCache failed: ${e.message}")
-        }
-    }
-
-    private fun estimateRangeKm(soc: Int?): Double? {
-        val socVal = soc ?: return null
-        if (socVal <= 0) return null
-        val ema = cachedEmaConsumption
-        val cap = cachedBatteryCapacity
-        if (ema <= 0.0 || cap <= 0.0) return null
-        return socVal / 100.0 * cap / ema * 100.0
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -307,19 +247,21 @@ class TrackingService : Service(), LocationListener {
      * Once per minute emit a compact INFO line with session summary — helps field
      * diagnosis (logcat) without flooding on every 3-sec tick.
      */
-    private fun maybeLogSessionSummary(now: Long, data: DiParsData, sessionId: Long?) {
+    private suspend fun maybeLogSessionSummary(now: Long, data: DiParsData, sessionId: Long?) {
         if (now - lastSummaryLogTs < SUMMARY_LOG_INTERVAL_MS) return
         lastSummaryLogTs = now
-        // TODO(Task 7): re-wire to OdometerConsumptionBuffer.getCumulativeStats() once Task 6/7 land.
+        val status = odometerBuffer.status()
         val state = ConsumptionAggregator.state.value
-        val cumKm: Double? = null
-        val cumKwh: Double? = null
+        val carry = socInterpolator.carryOver(data.totalElecConsumption, data.soc)
         Log.i(TAG, "Widget session: id=$sessionId, " +
-            "cumKm=${cumKm?.let { "%.2f".format(it) } ?: "—"}, " +
-            "cumKwh=${cumKwh?.let { "%.3f".format(it) } ?: "—"}, " +
-            "display=${state.displayValue?.let { "%.1f".format(it) } ?: "—"} kWh/100, " +
+            "bufferRows=${status.rowCount}, " +
+            "newestKm=${status.newestMileageKm?.let { "%.1f".format(it) } ?: "—"}, " +
+            "recentAvg=${"%.2f".format(status.recentAvg)} kWh/100, " +
+            "shortAvg=${status.shortAvg?.let { "%.2f".format(it) } ?: "—"}, " +
+            "display=${state.displayValue?.let { "%.1f".format(it) } ?: "—"}, " +
             "trend=${state.trend}, " +
-            "powerState=${data.powerState}, tripTracker=${tripTracker.state.value}")
+            "socCarry=${"%.3f".format(carry)} kWh, " +
+            "powerState=${data.powerState}")
     }
 
     override fun onDestroy() {
@@ -436,16 +378,30 @@ class TrackingService : Service(), LocationListener {
                         tripTracker.onData(data, loc)
 
                         val nowMs = System.currentTimeMillis()
-                        maybeRefreshConsumptionCache(nowMs)
                         val sessionId = updateSessionState(nowMs, data)
 
-                        // TODO(Task 7): replace stub call with OdometerConsumptionBuffer-backed
-                        // recentAvg / shortAvg once Task 6/7 wires the new buffer.
-                        ConsumptionAggregator.onSample(
-                            now = nowMs,
-                            recentAvg = cachedBaselineEma,
-                            shortAvg = null,
+                        val isCharging = (data.chargeGunState ?: 0) > 0
+                        odometerBuffer.onSample(
+                            mileage = data.mileage,
+                            totalElec = data.totalElecConsumption,
+                            socPercent = data.soc,
+                            sessionId = sessionId,
+                            isCharging = isCharging,
                         )
+                        socInterpolator.onSample(
+                            soc = data.soc,
+                            totalElecKwh = data.totalElecConsumption,
+                            sessionId = sessionId,
+                        )
+
+                        val recentAvg = odometerBuffer.recentAvgConsumption()
+                        val shortAvg = odometerBuffer.shortAvgConsumption()
+                        ConsumptionAggregator.onSample(now = nowMs, recentAvg = recentAvg, shortAvg = shortAvg)
+
+                        val rangeKm = rangeCalculator.estimate(soc = data.soc, totalElecKwh = data.totalElecConsumption)
+                        _lastRangeKm.value = rangeKm
+
+                        sessionId?.let { sessionPersistence.save(it, sessionLastActiveTs) }
 
                         chargeTracker.onData(data, loc)
                         // Idle drain tracked via energydata zero-km records only (HistoryImporter).
@@ -654,8 +610,7 @@ class TrackingService : Service(), LocationListener {
 
         // Block 1: запас (SOC + оценка km) + t°бат
         val socStr = data.soc?.let { "$it%" } ?: "—"
-        val rangeKm = estimateRangeKm(data.soc)
-        _lastRangeKm.value = rangeKm
+        val rangeKm = _lastRangeKm.value
         val rangeStr = rangeKm?.let { " ~${"%.0f".format(it)} км" } ?: ""
         val tempStr = data.avgBatTemp?.let { " | t°бат: ${it}°C" } ?: ""
         parts += "запас: $socStr$rangeStr$tempStr"
