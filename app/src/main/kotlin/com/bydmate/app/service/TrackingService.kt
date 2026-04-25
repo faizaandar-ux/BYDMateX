@@ -95,7 +95,7 @@ class TrackingService : Service(), LocationListener {
         // Tolerance between last "session active" tick and the current tick before we
         // consider the session closed. 30 sec survives brief powerState blips and
         // covers the DiLink wind-down after ignition-off.
-        private const val SESSION_IDLE_CLOSE_MS = 30_000L
+        private const val SESSION_IDLE_CLOSE_MS = 10_000L
         // Throttle for the periodic INFO summary so logcat doesn't get flooded.
         private const val SUMMARY_LOG_INTERVAL_MS = 60_000L
 
@@ -171,6 +171,17 @@ class TrackingService : Service(), LocationListener {
                 sessionLastActiveTs = restored.lastActiveTs
                 Log.i(TAG, "Restored session: startedAt=${restored.sessionStartedAt}, " +
                     "lastActiveTs=${restored.lastActiveTs}")
+            }
+        }
+
+        // v2.4.8: clear odometer buffers poisoned by the startup-race that
+        // shipped in v2.4.5–v2.4.7 (DiPars returned Mileage:0 on first poll
+        // and the zero row stuck around, blocking every later real reading
+        // as a "jump > 100 km"). Safe no-op once buffer is healthy.
+        serviceScope.launch {
+            val cleared = odometerBuffer.cleanupCorruptStartupRows()
+            if (cleared > 0) {
+                Log.i(TAG, "Cleared $cleared corrupt odometer-buffer row(s) (legacy startup-race)")
             }
         }
 

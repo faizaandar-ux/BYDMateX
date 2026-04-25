@@ -43,13 +43,25 @@ class OdometerConsumptionBuffer(
         // dropped in v2.4.7 because chargeGunState semantics differ per model
         // and the mis-detection silently blocked all driving samples.
         if (mileage == null) return@withLock
+        // DiPlus startup race: occasionally returns Mileage:0 before the CAN
+        // bus delivers the real odometer. Persisting that zero would poison
+        // the buffer permanently — every real reading afterwards looks like a
+        // jump > 100 km and gets rejected. Real BYD vehicles always report
+        // odometers far above 1 km, so a sub-1-km reading is always a glitch.
+        if (mileage < MIN_VALID_ODOMETER_KM) return@withLock
         val prev = dao.last()
         if (prev != null) {
             if (mileage < prev.mileageKm) return@withLock // odometer regression
-            if (mileage - prev.mileageKm > 100.0) return@withLock // unrealistic jump
-            val sameSession = prev.sessionId == sessionId
-            val tinyMove = mileage - prev.mileageKm < MIN_MILEAGE_DELTA
-            if (sameSession && tinyMove) return@withLock // spam suppression
+            if (mileage - prev.mileageKm > 100.0) {
+                // Unrealistic jump: prev row is stale (corrupt baseline from a
+                // legacy startup-race or a DiPars hiccup). Wipe and re-anchor
+                // on the new reading instead of silently rejecting forever.
+                dao.clear()
+            } else {
+                val sameSession = prev.sessionId == sessionId
+                val tinyMove = mileage - prev.mileageKm < MIN_MILEAGE_DELTA
+                if (sameSession && tinyMove) return@withLock // spam suppression
+            }
         }
         dao.insert(
             OdometerSampleEntity(
@@ -71,6 +83,24 @@ class OdometerConsumptionBuffer(
     suspend fun shortAvgConsumption(): Double? = mutex.withLock {
         val v = computeAvg(SHORT_WINDOW_KM, fallbackOnShort = false)
         if (v.isNaN()) null else v
+    }
+
+    /**
+     * One-shot cleanup for buffers poisoned by the v2.4.5–v2.4.7 startup race
+     * (DiPars returned `Mileage:0` on first poll and the row stuck around).
+     * Returns the number of rows cleared so the caller can log it. Safe to
+     * call on every service start — no-op when the buffer is already healthy.
+     */
+    suspend fun cleanupCorruptStartupRows(): Int = mutex.withLock {
+        val all = dao.windowFrom(0.0)
+        val oldest = all.firstOrNull() ?: return@withLock 0
+        if (oldest.mileageKm < MIN_VALID_ODOMETER_KM) {
+            val n = all.size
+            dao.clear()
+            n
+        } else {
+            0
+        }
     }
 
     suspend fun status(): BufferStatus = mutex.withLock {
@@ -126,5 +156,6 @@ class OdometerConsumptionBuffer(
         const val MIN_MILEAGE_DELTA = 0.05
         const val MAX_BUFFER_ROWS = 500
         const val TRIM_HYSTERESIS_KM = 1.0
+        const val MIN_VALID_ODOMETER_KM = 1.0
     }
 }

@@ -110,7 +110,8 @@ private fun RowEnergy(
     val trendColor = when (trend) {
         Trend.DOWN -> AccentGreen
         Trend.UP -> SocYellow
-        Trend.FLAT, Trend.NONE -> TextMuted
+        Trend.FLAT -> TextPrimary
+        Trend.NONE -> TextMuted
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
