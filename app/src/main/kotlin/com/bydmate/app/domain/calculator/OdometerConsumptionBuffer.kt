@@ -144,7 +144,15 @@ class OdometerConsumptionBuffer(
             totalKm += dKm
             totalKwh += dKwh
         }
-        val minOk = if (fallbackOnShort) MIN_BUFFER_KM else windowKm
+        // windowFrom(newest - 2.0) returns samples with mileage_km >= newest - 2.0,
+        // but the oldest such sample almost never sits exactly on that boundary —
+        // poll-jitter at real speeds makes oldest_in_window a hair above the cut,
+        // so totalKm = (last - oldest_in_window) is typically slightly under
+        // SHORT_WINDOW_KM. Requiring totalKm >= 2.0 here would reject the window
+        // most of the time and the widget would oscillate between coloured arrow
+        // and grey "no trend" all trip long. 1.5 km of valid pair data is enough
+        // to call the short-window trend.
+        val minOk = if (fallbackOnShort) MIN_BUFFER_KM else MIN_SHORT_BUFFER_KM
         if (totalKm < minOk) return if (fallbackOnShort) fallbackEmaProvider() else Double.NaN
         return totalKwh / totalKm * 100.0
     }
@@ -153,6 +161,7 @@ class OdometerConsumptionBuffer(
         const val WINDOW_KM = 25.0
         const val SHORT_WINDOW_KM = 2.0
         const val MIN_BUFFER_KM = 5.0
+        const val MIN_SHORT_BUFFER_KM = 1.5
         const val MIN_MILEAGE_DELTA = 0.05
         const val MAX_BUFFER_ROWS = 500
         const val TRIM_HYSTERESIS_KM = 1.0

@@ -213,12 +213,26 @@ class OdometerConsumptionBufferTest {
         assertEquals(2, dao.count())
     }
 
-    @Test fun `short avg null when distance under 2 km`() = runBlocking {
+    @Test fun `short avg null when distance under MIN_SHORT_BUFFER_KM`() = runBlocking {
         val dao = FakeOdometerSampleDao()
         val b = newBuffer(fallback = 18.0, dao = dao)
         val s = 1L
         b.onSample(10000.0, 1500.0, 80, s)
         b.onSample(10001.0, 1500.18, 80, s)
+        // 1.0 km of pair data — below the 1.5 km MIN_SHORT_BUFFER_KM threshold.
+        assertNull(b.shortAvgConsumption())
+    }
+
+    @Test fun `short avg null just below MIN_SHORT_BUFFER_KM threshold`() = runBlocking {
+        // Fixes the threshold introduced in v2.4.12: short window must accept
+        // 1.5 km of pair data but reject anything below.
+        val dao = FakeOdometerSampleDao()
+        val b = newBuffer(fallback = 18.0, dao = dao)
+        val s = 1L
+        var m = 10000.0; var e = 1500.0
+        b.onSample(m, e, 80, s)
+        repeat(14) { m += 0.1; e += 0.02; b.onSample(m, e, 80, s) }
+        // 14 × 0.1 = 1.4 km — just under MIN_SHORT_BUFFER_KM.
         assertNull(b.shortAvgConsumption())
     }
 
@@ -230,6 +244,41 @@ class OdometerConsumptionBufferTest {
         b.onSample(m, e, 80, s)
         repeat(2) { m += 1.0; e += 0.20; b.onSample(m, e, 80, s) }
         assertEquals(20.0, b.shortAvgConsumption()!!, 0.1)
+    }
+
+    @Test fun `short avg stays available during continuous driving with irregular ticks`() = runBlocking {
+        // Repro for the v2.4.11 widget grey-arrow report (2026-04-25 drive):
+        // user reported the consumption number going grey without an arrow for
+        // long stretches of a 10-km drive. Root cause: windowFrom(newest - 2.0)
+        // returns samples with mileage >= newest - 2.0, but the oldest such
+        // sample is almost never sitting EXACTLY on that boundary — typical
+        // poll intervals at real-world speeds yield non-divisible mileage steps,
+        // so the oldest in-window sample lies a hair above (newest - 2.0). That
+        // makes totalKm = (last - oldest_in_window) < 2.0, which trips the
+        // `totalKm < windowKm` guard and returns NaN → ConsumptionAggregator
+        // sees null shortAvg and publishes Trend.NONE → grey number, no arrow.
+        // Once the window slides far enough that an older sample lands ON the
+        // boundary by coincidence, the value appears again. Hence the
+        // intermittent "grey/coloured/grey" oscillation the user observed.
+        val dao = FakeOdometerSampleDao()
+        val b = newBuffer(fallback = 18.0, dao = dao)
+        val s = 1L
+        var m = 10000.0; var e = 1500.0
+        val step = 0.07          // ~3-sec poll @ 84 km/h, realistic spacing
+        val kwhStep = 0.014      // 20 kWh/100km
+        b.onSample(m, e, 80, s)
+        // Drive 5 km of continuous samples — well past the 2 km short-window threshold.
+        repeat(75) {
+            m += step
+            e += kwhStep
+            b.onSample(m, e, 80, s)
+        }
+        // After 5 km of uninterrupted driving, short window MUST have a value;
+        // a null here means the widget shows a grey number with no arrow.
+        assertTrue(
+            "shortAvg should be non-null after 5 km of continuous driving (was null because of boundary case)",
+            b.shortAvgConsumption() != null,
+        )
     }
 
     @Test fun `null totalElec pair is skipped`() = runBlocking {
