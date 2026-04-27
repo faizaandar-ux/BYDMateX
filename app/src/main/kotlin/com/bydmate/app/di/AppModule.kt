@@ -208,6 +208,21 @@ object AppModule {
         }
     }
 
+    private val MIGRATION_11_12 = object : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // v12: autoservice catch-up trace + baseline source.
+            // 4 new fields on existing 'charges' table — see spec section 5.1.
+            db.execSQL("ALTER TABLE charges ADD COLUMN lifetime_kwh_at_start REAL")
+            db.execSQL("ALTER TABLE charges ADD COLUMN lifetime_kwh_at_finish REAL")
+            db.execSQL("ALTER TABLE charges ADD COLUMN gun_state INTEGER")
+            db.execSQL("ALTER TABLE charges ADD COLUMN detection_source TEXT")
+
+            // One-shot cleanup of unfinished sessions left by the removed
+            // ChargeTracker. COMPLETED sessions stay in history.
+            db.execSQL("DELETE FROM charges WHERE status IN ('SUSPENDED', 'ACTIVE')")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
@@ -216,7 +231,7 @@ object AppModule {
             AppDatabase::class.java,
             "bydmate.db"
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
             .build()
     }
 
@@ -274,4 +289,19 @@ object AppModule {
             .writeTimeout(15, TimeUnit.SECONDS)
             .build()
     }
+
+    @Provides
+    @Singleton
+    fun provideAdbOnDeviceClient(
+        @ApplicationContext context: Context,
+        keyStore: com.bydmate.app.data.autoservice.AdbKeyStore
+    ): com.bydmate.app.data.autoservice.AdbOnDeviceClient =
+        com.bydmate.app.data.autoservice.AdbOnDeviceClientImpl(context, keyStore)
+
+    @Provides
+    @Singleton
+    fun provideAutoserviceClient(
+        adb: com.bydmate.app.data.autoservice.AdbOnDeviceClient
+    ): com.bydmate.app.data.autoservice.AutoserviceClient =
+        com.bydmate.app.data.autoservice.AutoserviceClientImpl(adb)
 }

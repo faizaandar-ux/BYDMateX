@@ -17,8 +17,8 @@ android {
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 252
-        versionName = "2.4.12"
+        versionCode = 261
+        versionName = "2.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -45,6 +45,30 @@ android {
     lint {
         // Not targeting Google Play -- DiLink sideload only
         disable += "ExpiredTargetSdkVersion"
+    }
+
+    sourceSets {
+        // MigrationTestHelper (Robolectric) resolves schemas via merged variant
+        // assets — not the "test" sourceSet. Both debug and release need them
+        // so testDebugUnitTest AND testReleaseUnitTest can find Migration*Test
+        // schemas. ~50KB extra in release APK is acceptable (sideload only).
+        getByName("debug") {
+            assets.srcDirs("$projectDir/schemas")
+        }
+        getByName("release") {
+            assets.srcDirs("$projectDir/schemas")
+        }
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            // android.util.Log is unavailable in pure JVM unit tests without Robolectric.
+            // returnDefaultValues = true makes all unmocked Android API methods return 0/null/false
+            // instead of throwing RuntimeException — this keeps AutoserviceChargingDetector
+            // testable without requiring Robolectric for every test class.
+            isReturnDefaultValues = true
+        }
     }
 
     compileOptions {
@@ -113,5 +137,16 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("androidx.room:room-testing:2.6.1")
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+
+    // ADB-on-device for autoservice access (path H, read-only)
+    // com.cgutman:adblib does not exist on MavenCentral (only com.tananaev:adblib does).
+    // Task 4 will use a hand-rolled ADB client fallback.
+    // implementation("com.cgutman:adblib:1.0.0")
 }

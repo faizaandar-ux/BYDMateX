@@ -302,6 +302,39 @@ fun SettingsScreen(
                     }
                 }
 
+                SectionHeader(text = "Системные данные (экспериментально)")
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardSurface),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Расширенные данные с машины: SoH батареи, истинный пробег от BMS, статистика зарядок. Только чтение.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Включить", color = TextPrimary, fontSize = 14.sp)
+                            Switch(
+                                checked = state.autoserviceEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.enableAutoservice(enabled)
+                                },
+                                colors = bydSwitchColors(),
+                            )
+                        }
+                        AutoserviceStatusBlock(status = state.autoserviceStatus)
+                    }
+                }
+
                 SectionHeader(text = "Данные")
                 Card(
                     shape = RoundedCornerShape(12.dp),
@@ -770,6 +803,70 @@ private fun DataSourceOption(label: String, selected: Boolean, onClick: () -> Un
             fontSize = 13.sp,
             modifier = Modifier.padding(start = 4.dp),
         )
+    }
+}
+
+@Composable
+private fun AutoserviceStatusBlock(status: AutoserviceStatus) {
+    when (status) {
+        AutoserviceStatus.NotEnabled -> Unit
+        AutoserviceStatus.Disconnected -> StatusRow(
+            marker = "✗",
+            markerColor = TextMuted,
+            title = "не подключено",
+            detail = "перезапусти приложение, если ADB включён в Настройках разработчика",
+            detailColor = TextSecondary,
+        )
+        AutoserviceStatus.AllSentinel -> StatusRow(
+            marker = "⚠",
+            markerColor = SocYellow,
+            title = "подключено, но данные не читаются",
+            detail = "возможно функция работает только на Leopard 3",
+            detailColor = SocYellow,
+        )
+        is AutoserviceStatus.Connected -> {
+            val soh = status.sohPercent?.let { "%.0f%%".format(it) } ?: "—"
+            val km = status.lifetimeKm?.let { "%.1f км".format(it) } ?: "—"
+            val kwh = status.lifetimeKwh?.let { "%.0f кВт·ч".format(it) } ?: "—"
+            StatusRow(
+                marker = "✓",
+                markerColor = AccentGreen,
+                title = "подключено",
+                detail = "SoH $soh • lifetime $km / $kwh",
+                detailColor = AccentGreen,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusRow(
+    marker: String,
+    markerColor: Color,
+    title: String,
+    detail: String,
+    detailColor: Color,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = marker,
+            color = markerColor,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 1.dp),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(text = title, color = TextPrimary, fontSize = 13.sp)
+            Text(
+                text = detail,
+                color = detailColor.copy(alpha = 0.85f),
+                fontSize = 11.sp,
+            )
+        }
     }
 }
 

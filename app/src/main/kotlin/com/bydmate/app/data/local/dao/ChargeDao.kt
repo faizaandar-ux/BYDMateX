@@ -51,6 +51,54 @@ interface ChargeDao {
         ORDER BY start_ts DESC LIMIT 30
     """)
     suspend fun getRecentChargesWithBatteryData(): List<ChargeEntity>
+
+    /**
+     * Returns the highest lifetime_kwh_at_finish recorded by an autoservice
+     * detector, or null if no autoservice-sourced sessions exist yet.
+     * Used as the catch-up baseline.
+     */
+    @Query("""
+        SELECT MAX(lifetime_kwh_at_finish) FROM charges
+        WHERE detection_source LIKE 'autoservice%'
+          AND lifetime_kwh_at_finish IS NOT NULL
+    """)
+    suspend fun getMaxLifetimeKwhAtFinish(): Double?
+
+    /** All charges detected by the autoservice path, ascending by start time. */
+    @Query("SELECT * FROM charges WHERE detection_source LIKE 'autoservice_%' ORDER BY start_ts ASC")
+    suspend fun getAllAutoserviceCharges(): List<ChargeEntity>
+
+    /**
+     * Returns true if there is at least one charge that was NOT sourced from autoservice
+     * (i.e. legacy DiPlus / manual charges).
+     */
+    @Query("SELECT EXISTS(SELECT 1 FROM charges WHERE detection_source IS NULL OR detection_source NOT LIKE 'autoservice_%')")
+    suspend fun hasLegacyCharges(): Boolean
+
+    /**
+     * Removes empty/junk charge rows that runCatchUp left behind in v2.4.15
+     * (3-row morning batch). Triggered once per TrackingService.onCreate after
+     * historyImporter.runSync. Filter mirrors the safety floor in
+     * AutoserviceChargingDetector (delta < 0.05 kWh ≈ measurement noise).
+     */
+    @Query("DELETE FROM charges WHERE kwh_charged IS NULL OR kwh_charged < 0.05")
+    suspend fun deleteEmpty(): Int
+
+    /**
+     * One-shot migration for v2.4.17: removes phantom autoservice rows where SOC
+     * didn't change (the lifetime_kwh delta bug from v2.4.15/v2.4.16). Filter:
+     * autoservice source + (socStart == socEnd OR either null) + kwhCharged > 1.0.
+     */
+    @Query("""
+        DELETE FROM charges
+        WHERE detection_source LIKE 'autoservice_%'
+          AND ABS(IFNULL(soc_start, 0) - IFNULL(soc_end, 0)) < 1
+          AND kwh_charged > 1.0
+    """)
+    suspend fun deletePhantomAutoserviceRows(): Int
+
+    @androidx.room.Delete
+    suspend fun delete(charge: ChargeEntity)
 }
 
 data class ChargeSummary(

@@ -24,9 +24,7 @@ import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.repository.ChargeRepository
-import com.bydmate.app.domain.tracker.ChargeTracker
 import com.bydmate.app.domain.tracker.TripState
-import com.bydmate.app.domain.tracker.ChargeState
 import com.bydmate.app.domain.tracker.TripTracker
 import com.bydmate.app.domain.calculator.ConsumptionAggregator
 import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
@@ -54,7 +52,6 @@ class TrackingService : Service(), LocationListener {
 
     @Inject lateinit var diParsClient: DiParsClient
     @Inject lateinit var tripTracker: TripTracker
-    @Inject lateinit var chargeTracker: ChargeTracker
     @Inject lateinit var chargeRepository: ChargeRepository
     @Inject lateinit var tripRepository: com.bydmate.app.data.repository.TripRepository
     @Inject lateinit var historyImporter: com.bydmate.app.data.local.HistoryImporter
@@ -66,6 +63,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var odometerBuffer: OdometerConsumptionBuffer
     @Inject lateinit var socInterpolator: SocInterpolator
     @Inject lateinit var rangeCalculator: RangeCalculator
+    @Inject lateinit var autoserviceDetector: com.bydmate.app.data.charging.AutoserviceChargingDetector
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -84,6 +82,15 @@ class TrackingService : Service(), LocationListener {
     // Odometer reading captured at session-start. current mileage - this = trip distance.
     @Volatile private var sessionStartMileageKm: Double? = null
     private var lastSummaryLogTs: Long = 0L
+    // Live charging-end detector state. The cascade detector ran only on
+    // service start in v2.4.17, missing every charge that completed while
+    // BYDMate was already running (Ready mode). We track gun-connect state
+    // across polls and fire runCatchUp once on the gun: connected→disconnected
+    // edge. observedChargingPowerKwAbs carries the peak |power| seen during
+    // the session so AC/DC classification doesn't have to fall back to the
+    // kwh/hours heuristic for short sessions.
+    @Volatile private var prevChargeGunState: Int? = null
+    @Volatile private var observedChargingPowerKwAbs: Double = 0.0
 
     companion object {
         private const val TAG = "TrackingService"
@@ -197,27 +204,30 @@ class TrackingService : Service(), LocationListener {
             if (enabled) alicePollingManager.start()
         }
 
-        // Finalize stale SUSPENDED charge sessions from previous runs
-        serviceScope.launch {
-            try {
-                val cutoff = System.currentTimeMillis() - 30 * 60 * 1000L
-                val stale = chargeRepository.getStaleSessions(cutoff)
-                stale.forEach { chargeTracker.finalizeSuspended(it) }
-                if (stale.isNotEmpty()) {
-                    Log.d(TAG, "Finalized ${stale.size} stale suspended charge sessions")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to finalize stale sessions: ${e.message}")
-            }
-        }
-
         // v2.0: event-based sync on service start
         serviceScope.launch {
             try {
                 val result = historyImporter.runSync()
+                // v2.4.16: одноразово вычищаем "пустые" зарядки, оставшиеся от
+                // detector-багов v2.4.15 (catch-up при неправильных tx-кодах писал
+                // ChargeEntity с большинством полей null). Защита `if (delta<0.05)` в
+                // детекторе предотвращает повторение, но историю надо подмести.
+                try {
+                    val deleted = chargeRepository.deleteEmpty()
+                    if (deleted > 0) Log.i(TAG, "Cleaned $deleted empty charge row(s)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "deleteEmpty failed: ${e.message}")
+                }
                 Log.i(TAG, "Sync: ${result.details ?: result.error ?: "ok"}")
-                // Also import charging sessions
-                diPlusDbReader.importChargingLog()
+                // Autoservice catch-up: synthesizes COMPLETED ChargeEntity records
+                // for charging that happened while DiLink was asleep. Best-effort —
+                // wrapped so a Binder/ADB failure does not break the import chain.
+                try {
+                    val outcome = autoserviceDetector.runCatchUp()
+                    Log.i(TAG, "Autoservice catch-up: ${outcome.outcome}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Autoservice catch-up failed: ${e.message}")
+                }
                 // AI insights (once per day)
                 insightsManager.refreshIfNeeded()
             } catch (e: Exception) {
@@ -324,7 +334,6 @@ class TrackingService : Service(), LocationListener {
                     val lastData = _lastData.value
                     val lastLoc = _lastLocation.value
                     tripTracker.forceEnd(lastData, lastLoc)
-                    chargeTracker.forceEnd(lastData)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Graceful shutdown: ${e.message}")
@@ -407,6 +416,34 @@ class TrackingService : Service(), LocationListener {
                             settingsRepository.saveLastKnownSoc(soc)
                         }
 
+                        // Live end-of-charging detection. Track the connected→disconnected
+                        // edge on chargeGunState. While the gun is connected and energy is
+                        // flowing in (Power < 0), remember the peak |power| for AC/DC.
+                        val curGun = data.chargeGunState
+                        if (curGun == 2 && (data.power ?: 0.0) < 0.0) {
+                            val abs = -(data.power ?: 0.0)
+                            if (abs > observedChargingPowerKwAbs) observedChargingPowerKwAbs = abs
+                        }
+                        if (prevChargeGunState == 2 && curGun != null && curGun != 2) {
+                            val powerForClassify = observedChargingPowerKwAbs.takeIf { it > 0.0 }
+                            observedChargingPowerKwAbs = 0.0
+                            serviceScope.launch {
+                                try {
+                                    val outcome = autoserviceDetector.runCatchUp(
+                                        observedKwAbs = powerForClassify
+                                    )
+                                    Log.i(TAG, "Live end-of-charging catch-up: ${outcome.outcome}")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Live end-of-charging failed: ${e.message}")
+                                }
+                            }
+                        }
+                        // Only update prev when DiPars actually returned a gun state.
+                        // A null response is a transient read failure, not a transition —
+                        // keeping the previous value lets the disconnect edge fire on the
+                        // next non-null poll instead of being silently swallowed.
+                        if (curGun != null) prevChargeGunState = curGun
+
                         // On first data after startup: detect offline charging
                         if (!firstDataReceived) {
                             firstDataReceived = true
@@ -450,7 +487,6 @@ class TrackingService : Service(), LocationListener {
 
                         sessionId?.let { sessionPersistence.save(it, sessionLastActiveTs) }
 
-                        chargeTracker.onData(data, loc)
                         // Idle drain tracked via energydata zero-km records only (HistoryImporter).
                         // Live power integration removed — DiPars 发动机功率 ≠ total battery drain.
                         automationEngine.evaluate(data, sessionId)
@@ -479,6 +515,15 @@ class TrackingService : Service(), LocationListener {
     private fun detectOfflineCharge(currentSoc: Int) {
         serviceScope.launch {
             try {
+                // When autoservice is enabled, AutoserviceChargingDetector.runCatchUp
+                // is the source of truth (lifetime_kwh delta is more accurate than
+                // SOC delta, and it survives BMS calibration ticks). Skip the
+                // legacy SOC-delta path to avoid duplicate ChargeEntity inserts.
+                if (settingsRepository.isAutoserviceEnabled()) {
+                    Log.d(TAG, "detectOfflineCharge skipped (autoservice ON)")
+                    return@launch
+                }
+
                 val lastSoc = settingsRepository.getLastKnownSoc() ?: return@launch
                 val lastTs = settingsRepository.getLastSocTimestamp()
                 val now = System.currentTimeMillis()

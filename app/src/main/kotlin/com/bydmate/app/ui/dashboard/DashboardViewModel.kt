@@ -8,6 +8,10 @@ import com.bydmate.app.data.remote.DynamicMetric
 import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
+import com.bydmate.app.domain.battery.BatteryStateRepository
+import com.bydmate.app.domain.calculator.ConsumptionAggregator
+import com.bydmate.app.domain.calculator.ConsumptionState
+import com.bydmate.app.domain.calculator.Trend
 import com.bydmate.app.service.TrackingService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,7 +76,19 @@ data class DashboardUiState(
     val idleDrainHoursWeek: Double = 0.0,
     val estimatedRangeKm: Double? = null,
     val diPlusConnected: Boolean = true,
-    val idleDrainAvailable: Boolean = true
+    val idleDrainAvailable: Boolean = true,
+    val adbConnected: Boolean? = null,
+    val currentSoh: Float? = null,
+    val currentLifetimeKm: Float? = null,
+    val currentLifetimeKwh: Float? = null,
+    val autoserviceEnabled: Boolean = false,
+    // Widget-style stats around SOC ring (mirror FloatingWidgetView bindings).
+    val insideTemp: Int? = null,
+    val tripDistanceKm: Double? = null,
+    val sessionStartedAt: Long? = null,
+    val consumption: Double? = null,
+    val consumptionTrend: Trend = Trend.NONE,
+    val isCharging: Boolean = false,
 )
 
 @HiltViewModel
@@ -80,7 +96,8 @@ class DashboardViewModel @Inject constructor(
     private val tripRepository: TripRepository,
     private val settingsRepository: SettingsRepository,
     private val idleDrainDao: IdleDrainDao,
-    private val insightsManager: InsightsManager
+    private val insightsManager: InsightsManager,
+    private val batteryStateRepository: BatteryStateRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -94,6 +111,7 @@ class DashboardViewModel @Inject constructor(
         loadCurrency()
         loadInsight()
         loadPeriodSummary()
+        viewModelScope.launch { loadAutoserviceFlag() }
     }
 
     fun setPeriod(period: DashboardPeriod) {
@@ -111,17 +129,33 @@ class DashboardViewModel @Inject constructor(
         val running: Boolean,
         val connected: Boolean,
         val rangeKm: Double?,
+        val sessionStartedAt: Long?,
+        val tripDistanceKm: Double?,
+        val consumption: ConsumptionState,
     )
 
     private fun observeLiveData() {
         viewModelScope.launch {
+            // combine() is typed only up to 5 flows — bundle data+connected and
+            // session+tripKm to stay under the limit (mirrors WidgetController).
+            val dataConnFlow = TrackingService.lastData.combine(TrackingService.diPlusConnected) { d, c -> d to c }
+            val tripFlow = TrackingService.sessionStartedAt.combine(TrackingService.tripDistanceKm) { s, t -> s to t }
             combine(
-                TrackingService.lastData,
+                dataConnFlow,
                 TrackingService.isRunning,
-                TrackingService.diPlusConnected,
                 TrackingService.lastRangeKm,
-            ) { data, running, connected, rangeKm ->
-                LiveSnapshot(data, running, connected, rangeKm)
+                tripFlow,
+                ConsumptionAggregator.state,
+            ) { dataConn, running, rangeKm, trip, consumption ->
+                LiveSnapshot(
+                    data = dataConn.first,
+                    connected = dataConn.second,
+                    running = running,
+                    rangeKm = rangeKm,
+                    sessionStartedAt = trip.first,
+                    tripDistanceKm = trip.second,
+                    consumption = consumption,
+                )
             }.collect { snapshot ->
                 val data = snapshot.data
                 val running = snapshot.running
@@ -155,7 +189,18 @@ class DashboardViewModel @Inject constructor(
                             )
                         ),
                         estimatedRangeKm = rangeKm ?: current.estimatedRangeKm,
-                        diPlusConnected = connected
+                        diPlusConnected = connected,
+                        insideTemp = data?.insideTemp ?: current.insideTemp,
+                        tripDistanceKm = snapshot.tripDistanceKm,
+                        sessionStartedAt = snapshot.sessionStartedAt,
+                        consumption = snapshot.consumption.displayValue,
+                        consumptionTrend = snapshot.consumption.trend,
+                        // Bolt = "energy is flowing into the battery right now."
+                        // chargeGunState semantics differ from BMS chargingStatus codes
+                        // across firmwares; the only universally truthful signal is
+                        // gun-connected AND negative motor power. Regen has gun=0, so
+                        // it's filtered. Gun pull → gunState=0 within ≤3s → bolt off.
+                        isCharging = data?.chargeGunState == 2 && (data.power ?: 0.0) < -0.3,
                     )
                 }
             }
@@ -349,6 +394,37 @@ class DashboardViewModel @Inject constructor(
     fun refresh() {
         loadPeriodSummary()
         loadInsight()
+        viewModelScope.launch { loadAutoserviceFlag() }
+    }
+
+    private suspend fun loadAutoserviceFlag() {
+        val enabled = settingsRepository.isAutoserviceEnabled()
+        if (!enabled) {
+            _uiState.update {
+                it.copy(
+                    autoserviceEnabled = false,
+                    adbConnected = null,
+                    currentSoh = null,
+                    currentLifetimeKm = null,
+                    currentLifetimeKwh = null,
+                )
+            }
+            return
+        }
+        val state = runCatching { batteryStateRepository.refresh() }.getOrNull()
+        _uiState.update {
+            if (state == null) {
+                it.copy(autoserviceEnabled = true, adbConnected = false)
+            } else {
+                it.copy(
+                    autoserviceEnabled = true,
+                    adbConnected = state.autoserviceAvailable,
+                    currentSoh = state.sohPercent,
+                    currentLifetimeKm = state.lifetimeKm,
+                    currentLifetimeKwh = state.lifetimeKwh,
+                )
+            }
+        }
     }
 
     fun toggleBatteryHealthExpanded() {

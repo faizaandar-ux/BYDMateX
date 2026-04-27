@@ -7,16 +7,17 @@ import android.os.Environment
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.data.local.EnergyDataReader
 import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.remote.DiParsClient
-import com.bydmate.app.data.remote.DiPlusDbReader
 import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.OpenRouterModel
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
+import com.bydmate.app.domain.battery.BatteryStateRepository
 import com.bydmate.app.service.UpdateChecker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -38,6 +39,36 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
+
+/**
+ * Represents the runtime status of the autoservice data channel.
+ *
+ * - [NotEnabled] — the toggle is OFF; render no status block.
+ * - [Disconnected] — toggle ON, but [BatteryStateRepository.refresh] returned
+ *   `autoserviceAvailable = false` (ADB not connected or service unreachable).
+ * - [Connected] — toggle ON and at least one real value was returned.
+ *   Individual fields are nullable because partial sentinel responses occur.
+ * - [AllSentinel] — see KDoc on the object itself.
+ */
+sealed class AutoserviceStatus {
+    object NotEnabled : AutoserviceStatus()
+    object Disconnected : AutoserviceStatus()
+    data class Connected(
+        val socNow: Float?,
+        val lifetimeKm: Float?,
+        val lifetimeKwh: Float?,
+        val sohPercent: Float?
+    ) : AutoserviceStatus()
+
+    /**
+     * Toggle ON, autoservice connected, but the battery-trio (SoC, lifetime km,
+     * lifetime kWh) all came back as sentinel/null. Typically happens when the
+     * car is in deep standby — DiLink BMS bus quiet, only 12V + cached SoH
+     * still readable. UI should show "сейчас машина не отвечает" rather than
+     * empty cards.
+     */
+    object AllSentinel : AutoserviceStatus()
+}
 
 /**
  * UI state for the Settings screen.
@@ -82,7 +113,9 @@ data class SettingsUiState(
     val aliceSaveStatus: String? = null,
     val autoCheckUpdates: Boolean = true,
     val dataSource: String = "ENERGYDATA",
-    val dataSourceStatus: String? = null
+    val dataSourceStatus: String? = null,
+    val autoserviceEnabled: Boolean = false,
+    val autoserviceStatus: AutoserviceStatus = AutoserviceStatus.NotEnabled
 )
 
 @HiltViewModel
@@ -96,8 +129,9 @@ class SettingsViewModel @Inject constructor(
     private val energyDataReader: EnergyDataReader,
     private val diParsClient: DiParsClient,
     private val idleDrainDao: IdleDrainDao,
-    private val diPlusDbReader: DiPlusDbReader,
-    private val insightsManager: InsightsManager
+    private val insightsManager: InsightsManager,
+    private val adbOnDeviceClient: AdbOnDeviceClient,
+    private val batteryStateRepository: BatteryStateRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState(
@@ -159,6 +193,8 @@ class SettingsViewModel @Inject constructor(
 
             val dataSource = settingsRepository.getDataSource().name
 
+            val autoserviceEnabled = settingsRepository.isAutoserviceEnabled()
+
             _uiState.update {
                 it.copy(
                     batteryCapacity = capacity,
@@ -178,9 +214,48 @@ class SettingsViewModel @Inject constructor(
                     aliceEndpoint = aliceEndpoint,
                     aliceApiKey = aliceApiKey,
                     aliceEnabled = aliceEnabled,
-                    dataSource = dataSource
+                    dataSource = dataSource,
+                    autoserviceEnabled = autoserviceEnabled,
                 )
             }
+
+            loadAutoserviceState()
+        }
+    }
+
+    internal suspend fun loadAutoserviceState() {
+        val status = if (!settingsRepository.isAutoserviceEnabled()) {
+            AutoserviceStatus.NotEnabled
+        } else {
+            val state = batteryStateRepository.refresh()
+            when {
+                !state.autoserviceAvailable -> AutoserviceStatus.Disconnected
+                state.socNow == null && state.lifetimeKm == null && state.lifetimeKwh == null ->
+                    AutoserviceStatus.AllSentinel
+                else -> AutoserviceStatus.Connected(
+                    socNow = state.socNow,
+                    lifetimeKm = state.lifetimeKm,
+                    lifetimeKwh = state.lifetimeKwh,
+                    sohPercent = state.sohPercent
+                )
+            }
+        }
+        _uiState.update { it.copy(autoserviceStatus = status) }
+    }
+
+    /**
+     * UI entry point for the autoservice toggle. Persists the new value, then
+     * triggers ADB handshake on enable. Single coroutine — no UI race between
+     * persist-reload and connect-reload.
+     */
+    fun enableAutoservice(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setAutoserviceEnabled(enabled)
+            _uiState.update { it.copy(autoserviceEnabled = enabled) }
+            if (enabled) {
+                adbOnDeviceClient.connect()
+            }
+            loadAutoserviceState()
         }
     }
 
@@ -363,24 +438,6 @@ class SettingsViewModel @Inject constructor(
                 val status = result.details
                     ?: "Импортировано ${result.count} поездок из BYD"
                 _uiState.update { it.copy(importStatus = status) }
-            }
-        }
-    }
-
-    /** Import charging sessions from DiPlus ChargingLog database. */
-    fun importDiPlusCharges() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(importStatus = "Импорт DiPlus...") }
-            val result = diPlusDbReader.importChargingLog()
-            if (result.isError) {
-                _uiState.update { it.copy(importStatus = "Ошибка: ${result.error}") }
-            } else {
-                val msg = buildString {
-                    append("Импортировано ${result.imported} зарядок")
-                    if (result.skipped > 0) append(", пропущено ${result.skipped} дублей")
-                    append(" (всего в DiPlus: ${result.totalInDb})")
-                }
-                _uiState.update { it.copy(importStatus = msg) }
             }
         }
     }
@@ -638,7 +695,7 @@ class SettingsViewModel @Inject constructor(
                     "logcat", "-v", "time",
                     "-s", "BootReceiver:*", "SilentStartActivity:*",
                     "DiParsClient:*", "TrackingService:*", "TripTracker:*",
-                    "ChargeTracker:*", "IdleDrainTracker:*", "DiPlusDbReader:*",
+                    "DiPlusDbReader:*",
                     "HistoryImporter:*", "EnergyDataReader:*"
                 ))
 
