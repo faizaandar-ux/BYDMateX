@@ -26,6 +26,7 @@ import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
+import com.bydmate.app.domain.calculator.BigNumberCalculator
 import com.bydmate.app.domain.calculator.ConsumptionAggregator
 import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
 import com.bydmate.app.domain.calculator.SocInterpolator
@@ -81,6 +82,17 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var sessionLastActiveTs: Long = 0L
     // Odometer reading captured at session-start. current mileage - this = trip distance.
     @Volatile private var sessionStartMileageKm: Double? = null
+    // Lifetime-elec reading captured at session-start. current totalElec - this =
+    // trip kWh consumed. Mirrors sessionStartMileageKm: in-memory only, lazy-init
+    // on first non-null sample, reset to null on session end. Process restart
+    // mid-trip drops baseline so big-number falls back to lastTripAvg until the
+    // next 500 m of post-restart driving (acceptable plus-minus per v2.5.2 spec).
+    @Volatile private var sessionStartTotalElecKwh: Double? = null
+
+    // Cached lastTripAvg (kWh/100km) for BigNumberCalculator. Refreshed on
+    // session end and on service start. Null when no eligible trip in DB.
+    @Volatile private var cachedLastTripAvg: Double? = null
+
     private var lastSummaryLogTs: Long = 0L
     // Live charging-end detector state. The cascade detector ran only on
     // service start in v2.4.17, missing every charge that completed while
@@ -192,6 +204,13 @@ class TrackingService : Service(), LocationListener {
             }
         }
 
+        // Refresh cached last-trip-avg so the widget's parking-mode big-number is
+        // ready before the first DiPars tick lands.
+        serviceScope.launch {
+            cachedLastTripAvg = tripRepository.getLastTripAvgConsumption()
+            Log.d(TAG, "Initial cachedLastTripAvg on service start: $cachedLastTripAvg")
+        }
+
         startPolling()
         _isRunning.value = true
         appendChainLog("TrackingService fully started")
@@ -272,11 +291,18 @@ class TrackingService : Service(), LocationListener {
             if (currentSession == null) {
                 _sessionStartedAt.value = now
                 sessionStartMileageKm = data.mileage
+                sessionStartTotalElecKwh = data.totalElecConsumption
                 Log.i(TAG, "Widget session START at $now " +
-                    "(powerOn=$powerOn, driving=$driving, mileageStart=${data.mileage})")
-            } else if (sessionStartMileageKm == null && data.mileage != null) {
-                // DiPars was unready at the exact session-start tick — lazy-initialize now.
-                sessionStartMileageKm = data.mileage
+                    "(powerOn=$powerOn, driving=$driving, mileageStart=${data.mileage}, " +
+                    "totalElecStart=${data.totalElecConsumption})")
+            } else {
+                // Lazy-init both baselines if DiPars was unready at the exact session-start tick.
+                if (sessionStartMileageKm == null && data.mileage != null) {
+                    sessionStartMileageKm = data.mileage
+                }
+                if (sessionStartTotalElecKwh == null && data.totalElecConsumption != null) {
+                    sessionStartTotalElecKwh = data.totalElecConsumption
+                }
             }
         } else if (currentSession != null) {
             val idleFor = now - sessionLastActiveTs
@@ -284,8 +310,14 @@ class TrackingService : Service(), LocationListener {
                 Log.i(TAG, "Widget session END (idle ${idleFor / 1000}s, powerOn=$powerOn, driving=$driving)")
                 _sessionStartedAt.value = null
                 sessionStartMileageKm = null
+                sessionStartTotalElecKwh = null
                 _tripDistanceKm.value = null
                 sessionPersistence.clear()
+                // Refresh cached last-trip-avg so the post-end widget shows the trip we just closed.
+                serviceScope.launch {
+                    cachedLastTripAvg = tripRepository.getLastTripAvgConsumption()
+                    Log.d(TAG, "Refreshed cachedLastTripAvg after session end: $cachedLastTripAvg")
+                }
             }
             // else: grace period — keep session alive through brief blip
         }
@@ -471,18 +503,42 @@ class TrackingService : Service(), LocationListener {
 
                         val recentAvg = odometerBuffer.recentAvgConsumption()
                         val shortAvg = odometerBuffer.shortAvgConsumption()
-                        ConsumptionAggregator.onSample(now = nowMs, recentAvg = recentAvg, shortAvg = shortAvg)
 
-                        val rangeKm = rangeCalculator.estimate(soc = data.soc, totalElecKwh = data.totalElecConsumption)
-                        _lastRangeKm.value = rangeKm
-
-                        // Odometer regression (rare DiPars glitch) leaves delta negative.
-                        // Show "—" on the widget instead of silent 0.0 so field diagnosis
+                        // Live trip distance (current odometer minus session-start odometer).
+                        // Odometer regression (rare DiPars glitch) leaves delta negative,
+                        // surface "—" on the widget instead of silent 0 so field diagnosis
                         // still sees the anomaly. OdometerConsumptionBuffer blocks the same
                         // regression at insert, so consumption math is unaffected.
                         val tripDistance = sessionStartMileageKm?.let { start ->
                             data.mileage?.let { cur -> (cur - start).takeIf { it >= 0.0 } }
                         }
+                        // Live trip energy (current totalElec minus session-start totalElec).
+                        // BMS recalibration can briefly push totalElec lower than baseline.
+                        // Pass null on negative delta so BigNumberCalculator falls back to
+                        // lastTripAvg instead of computing 0.0 / km and showing "0.0" on the
+                        // widget for the recal tick.
+                        val tripKwhConsumed = sessionStartTotalElecKwh?.let { base ->
+                            data.totalElecConsumption?.let { cur -> (cur - base).takeIf { it >= 0.0 } }
+                        }
+
+                        val displayValue = BigNumberCalculator.computeDisplay(
+                            tripKm = tripDistance,
+                            tripKwh = tripKwhConsumed,
+                            lastTripAvg = cachedLastTripAvg,
+                            recentAvg25km = recentAvg,
+                            sessionActive = sessionId != null,
+                        )
+
+                        ConsumptionAggregator.onSample(
+                            now = nowMs,
+                            displayValue = displayValue,
+                            recentAvg = recentAvg,
+                            shortAvg = shortAvg,
+                        )
+
+                        val rangeKm = rangeCalculator.estimate(soc = data.soc, totalElecKwh = data.totalElecConsumption)
+                        _lastRangeKm.value = rangeKm
+
                         _tripDistanceKm.value = tripDistance
 
                         sessionId?.let { sessionPersistence.save(it, sessionLastActiveTs) }

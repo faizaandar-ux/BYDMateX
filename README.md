@@ -53,7 +53,7 @@
 
 <img src="docs/screenshots/dashboard.jpg" alt="Dashboard" width="800">
 
-Вокруг SOC-кольца расположены четыре значения в стиле плавающего виджета: сверху длительность поездки, одометр и температура в салоне; снизу пробег текущей поездки, расчётный запас хода и расход за последние 25 км пробега со стрелкой тренда. Цвета и логика тренда такие же, как в плавающем виджете, поэтому информация читается одинаково и на главном экране, и поверх других приложений.
+Вокруг SOC-кольца расположены четыре значения в стиле плавающего виджета: сверху длительность поездки, одометр и температура в салоне; снизу пробег текущей поездки, расчётный запас хода и расход текущей поездки со стрелкой тренда. Цвета и логика тренда такие же, как в плавающем виджете, поэтому информация читается одинаково и на главном экране, и поверх других приложений.
 
 Ниже кольца: AI-инсайт, малая карточка здоровья батареи (SoH на Leopard 3, температура, 12V), расход на стоянке, последние поездки, фильтр периода.
 
@@ -141,7 +141,7 @@
 **Центральная строка** (крупно, главные значения):
 - **SOC %** (18sp bold, цветной) — заряд тяговой батареи. Зелёный > 50%, жёлтый 20–50%, красный < 20%
 - **~N км** (28sp белым) — расчётный запас хода: `SOC × ёмкость батареи ÷ baseline-расход × 100`. Тильда подчёркивает что это оценка, не показания БК
-- **X.X ↓** (18sp, цветной по тренду) — **расход за последние 25 км пробега**, кВт·ч/100км, со стрелкой тренда (см. ниже)
+- **X.X ↓** (18sp, цветной по тренду) — **расход текущей поездки**, кВт·ч/100км, со стрелкой тренда (см. ниже)
 
 **Нижняя строка** (мелким, 13sp):
 - 🔋 **Температура батареи** — °C, с DiPlus
@@ -149,11 +149,15 @@
 
 ### Расход и стрелка тренда (правый блок)
 
-Цифра справа — расход за последние 25 километров пробега в кВт·ч/100км. Окно скользящее: с каждым новым километром старые километры выпадают, новые добавляются. Считается по фактическому пробегу — независимо от того, в одну поездку эти 25 км уложились или в несколько подряд.
+Цифра справа — расход текущей поездки в кВт·ч/100км. Считается как энергия, потраченная с момента включения зажигания, делённая на пройденные с того же момента километры. По мере движения цифра сходится к тому значению, которое в итоге запишется в историю поездок: что видно в виджете в момент остановки, то и попадёт в карточку поездки.
 
-**Зачем смотреть.** Слева виджет показывает запас хода `~180 км` — он построен на том же 25-километровом среднем расходе. Цифра справа делает прогноз дальности прозрачным: видишь её — видишь, на чём он рассчитан. Поедешь чуть иначе несколько километров — цифра постепенно сдвинется, и оценка дальности подтянется следом.
+**Первые 2 километра** виджет плавно переходит со среднего расхода прошлой поездки на расход текущей: до 300 м показывает прошлое значение, с 300 м до 2 км линейно подмешивает текущее, после 2 км показывает только текущее. Так не пугают резкие 50–60 кВт·ч/100км из холодного старта и разгона: пока поездка короткая, за основу берётся уже устоявшийся средний расход прошлой поездки, и только когда дистанция становится представительной, цифра уходит на собственный расход.
 
-**Стрелка тренда** появляется после 2 км пробега и сравнивает текущий расход с твоим обычным стилем (среднее по последним 10 поездкам):
+**На стоянке** (зажигание выключено) показывается средний расход прошлой завершённой поездки — то же значение, что было видно в её последний момент.
+
+**Запас хода и тренд** считаются отдельно, по своей шкале: расчёт `~N км` слева и стрелка тренда справа смотрят в скользящее окно последних 25 километров пробега и не зависят от длины текущей поездки.
+
+**Стрелка тренда** появляется после 2 км пробега и сравнивает скользящее 25-километровое среднее с твоим обычным стилем (среднее по последним 10 поездкам):
 
 - **↓ зелёная** — едешь экономнее обычного
 - **→ белая** (стрелка прямая) — в пределах обычного
@@ -437,8 +441,8 @@ The BYD onboard computer **underestimates consumption by 10-30%**. BYDMate reads
 
 ### Features
 
-- **Real consumption** from BMS energydata (not onboard estimates), trend uses a rolling 25 km window
-- **Dashboard** with widget-style stats around the SOC ring: trip duration, odometer, cabin temp on top; trip distance, estimated range, rolling-25 km consumption + trend arrow on bottom. Same colors and trend logic as the floating widget
+- **Real consumption** from BMS energydata (not onboard estimates). Big number = live current-trip average that converges to the recorded trip; trend arrow uses a rolling 25 km window
+- **Dashboard** with widget-style stats around the SOC ring: trip duration, odometer, cabin temp on top; trip distance, estimated range, live trip consumption + trend arrow (still over a rolling 25 km window) on bottom. Same colors and trend logic as the floating widget
 - **Trip logging** with GPS routes, distance, speed
 - **Charges journal** with automatic AC / DC detection, period and lifetime stats, manual add and edit
 - **AI Insights** — LLM-powered driving analysis via OpenRouter (optional)
@@ -446,7 +450,7 @@ The BYD onboard computer **underestimates consumption by 10-30%**. BYDMate reads
 - **Battery health** — temperature, real **SoH on Leopard 3** (read from the car), cell balance, 12V voltage
 - **Trip map** with speed-colored routes (osmdroid, no Google Maps)
 - **Automation** — WHEN→THEN rules: triggers on 25 parameters → 41 D+ commands (windows incl. driver/passenger, climate, lights, locks, mirrors) + 8 action kinds (notification, app launch, call, navigate, URL, Yandex Music). Overlay confirmation with 15 s auto-cancel
-- **Floating widget** — draggable 7-field overlay: SOC, range, rolling-25 km consumption + trend arrow vs your 10-trip baseline, ignition-bounded trip time, cabin/battery temp, 12V. Session survives app kill via SharedPreferences anchor
+- **Floating widget** — draggable 7-field overlay: SOC, range, live trip consumption + trend arrow (still over a rolling 25 km window) vs your 10-trip baseline, ignition-bounded trip time, cabin/battery temp, 12V. Session survives app kill via SharedPreferences anchor
 - **Auto-start** via WorkManager on boot
 - **CSV export** for trips and charges
 

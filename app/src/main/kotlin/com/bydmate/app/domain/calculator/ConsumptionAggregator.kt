@@ -34,28 +34,33 @@ object ConsumptionAggregator {
     private var candidateSince: Long = 0L
 
     /**
+     * @param displayValue  Pre-computed value to render on widget. Comes from
+     *                      BigNumberCalculator. Pass null to render prochirk.
+     *                      Aggregator no longer derives display from recentAvg, v2.5.2
+     *                      splits "what to show" (trip-avg-based) from "trend baseline"
+     *                      (25-km window).
      * @param recentAvg     25-km rolling average from OdometerConsumptionBuffer.
-     *                      Pass 0 (or negative) when buffer fallbacks to nothing.
+     *                      Used ONLY as the trend ratio denominator.
      * @param shortAvg      2-km short window. Null when buffer has < 2 km of valid data.
      */
     @Synchronized
     fun onSample(
         now: Long,
+        displayValue: Double?,
         recentAvg: Double,
         shortAvg: Double?,
     ) {
-        val display = if (recentAvg > 0.01) recentAvg else null
-        if (display == null || shortAvg == null) {
+        if (displayValue == null || shortAvg == null || recentAvg <= 0.01) {
             committedTrend = Trend.NONE
             candidateTrend = Trend.NONE
             candidateSince = 0L
-            publish(display, Trend.NONE)
+            publish(displayValue, Trend.NONE)
             return
         }
         val ratio = shortAvg / recentAvg
         val candidate = candidateFor(committedTrend, ratio)
         updateDebounce(now, candidate)
-        publish(display, committedTrend)
+        publish(displayValue, committedTrend)
     }
 
     @Synchronized

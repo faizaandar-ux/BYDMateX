@@ -129,6 +129,23 @@ class TripRepository @Inject constructor(
         return ema ?: 0.0
     }
 
+    /**
+     * Average consumption (kWh/100km) of the most recent eligible completed trip.
+     * Used by the floating widget's big-number when no active trip is in progress
+     * and during the first 500 m of a freshly started trip (smooth fade from
+     * "your last drive" to "your current drive").
+     *
+     * Eligible: distanceKm >= 1.0 AND kwhConsumed > 0 (filtering done in DAO).
+     * Returns null when no eligible trip exists (cold install).
+     */
+    suspend fun getLastTripAvgConsumption(): Double? {
+        val pick = tripDao.getRecentForEma(limit = 1).firstOrNull() ?: return null
+        val km = pick.distanceKm ?: return null
+        val kwh = pick.kwhConsumed ?: return null
+        if (km <= 0.0) return null
+        return kwh / km * 100.0
+    }
+
     private fun invalidateEmaCache() {
         cachedEmaConsumption = null
     }
