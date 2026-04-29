@@ -47,11 +47,17 @@ object WidgetController {
     private const val LONG_PRESS_MS = 1500L
 
     @Volatile private var appForegrounded: Boolean = false
+    @Volatile private var previewMode: Boolean = false
 
     private var wm: WindowManager? = null
     private var widgetView: ComposeView? = null
     private var widgetLifecycle: OverlayLifecycleOwner? = null
     private var widgetParams: WindowManager.LayoutParams? = null
+
+    // Current widget bounds in px after scale; touch-listener reads these
+    // to clamp drag positions correctly when the user resized the widget.
+    @Volatile private var currentWidgetWpx: Int = 0
+    @Volatile private var currentWidgetHpx: Int = 0
 
     private var trashView: ComposeView? = null
     private var trashLifecycle: OverlayLifecycleOwner? = null
@@ -59,6 +65,7 @@ object WidgetController {
     private var dataScope: CoroutineScope? = null
     private var dataJob: Job? = null
     private lateinit var prefsAlphaFlow: kotlinx.coroutines.flow.Flow<Float>
+    private lateinit var prefsScaleFlow: kotlinx.coroutines.flow.Flow<Float>
 
     // Compose state for the widget data
     private var socState = mutableStateOf<Int?>(null)
@@ -71,31 +78,37 @@ object WidgetController {
     private var batTempState = mutableStateOf<Int?>(null)
     private var voltsState = mutableStateOf<Double?>(null)
     private var alphaState = mutableStateOf(1.0f)
+    private var scaleState = mutableStateOf(1.0f)
     private var trashActive = mutableStateOf(false)
 
     @Synchronized
     fun attach(context: Context) {
-        if (appForegrounded) return     // race-guard: our app is on screen
-        if (widgetView != null) return  // already attached
+        if (appForegrounded && !previewMode) return  // race-guard, but preview wins
+        if (widgetView != null) return               // already attached
 
         val appCtx = context.applicationContext
         val prefs = WidgetPreferences(appCtx)
-        // long-press hid widget until user opens MainActivity
-        if (prefs.isHiddenUntilAppLaunch()) return
+        // long-press hid widget until user opens MainActivity (preview wins)
+        if (prefs.isHiddenUntilAppLaunch() && !previewMode) return
 
         val windowManager = appCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         wm = windowManager
 
         prefsAlphaFlow = prefs.alphaFlow()
+        prefsScaleFlow = prefs.scaleFlow()
         val metrics = appCtx.resources.displayMetrics
 
-        val widgetWpx = dp(appCtx, WIDGET_WIDTH_DP)
-        val widgetHpx = dp(appCtx, WIDGET_HEIGHT_DP)
+        val initialScale = prefs.getScale()
+        scaleState.value = initialScale
+        val widgetWpx = (dp(appCtx, WIDGET_WIDTH_DP) * initialScale).toInt()
+        val widgetHpx = (dp(appCtx, WIDGET_HEIGHT_DP) * initialScale).toInt()
+        currentWidgetWpx = widgetWpx
+        currentWidgetHpx = widgetHpx
         val (startX, startY) = resolveStartPosition(prefs, metrics, widgetWpx, widgetHpx)
 
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            widgetWpx,
+            widgetHpx,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else
@@ -130,9 +143,10 @@ object WidgetController {
                     batTemp = batTempState.value,
                     voltage12v = voltsState.value,
                     alpha = alphaState.value,
+                    scaleFactor = scaleState.value,
                 )
             }
-            setOnTouchListener(WidgetTouchListener(appCtx, prefs, metrics, widgetWpx, widgetHpx))
+            setOnTouchListener(WidgetTouchListener(appCtx, prefs, metrics))
         }
         widgetView = compose
 
@@ -150,7 +164,31 @@ object WidgetController {
     @Synchronized
     fun setAppForegrounded(foreground: Boolean) {
         appForegrounded = foreground
-        if (foreground) detach()
+        if (foreground && !previewMode) detach()
+    }
+
+    /**
+     * Settings UI calls this while user drags the alpha or size slider so the
+     * widget pops over Settings, letting the user see the change live. Set to
+     * false on screen leave (DisposableEffect.onDispose) to restore normal
+     * foreground-detach behavior.
+     */
+    @Synchronized
+    fun setPreviewMode(context: Context, active: Boolean) {
+        previewMode = active
+        val appCtx = context.applicationContext
+        val prefs = WidgetPreferences(appCtx)
+        if (active) {
+            // Skip preview-attach silently if overlay permission was revoked —
+            // attach() would throw on addView. User toggles widget back on
+            // through the main switch which handles the permission flow.
+            if (prefs.isEnabled() &&
+                widgetView == null &&
+                android.provider.Settings.canDrawOverlays(appCtx)
+            ) attach(appCtx)
+        } else if (appForegrounded) {
+            detach()
+        }
     }
 
     @Synchronized
@@ -179,9 +217,13 @@ object WidgetController {
     private fun startDataSubscription() {
         val scope = CoroutineScope(Dispatchers.Main)
         dataScope = scope
-        // Stock combine(...) is typed only up to 5 flows — bundle consumption + alpha
-        // into one derived pair so we stay under the limit.
-        val uiFlow = ConsumptionAggregator.state.combine(prefsAlphaFlow) { c, a -> c to a }
+        // Stock combine(...) is typed only up to 5 flows — bundle consumption +
+        // alpha + scale into one Triple so we stay under the limit.
+        val uiFlow = combine(
+            ConsumptionAggregator.state,
+            prefsAlphaFlow,
+            prefsScaleFlow,
+        ) { c, a, s -> Triple(c, a, s) }
         dataJob = scope.launch {
             combine(
                 TrackingService.lastData,
@@ -197,6 +239,7 @@ object WidgetController {
                     tripDistanceKm = tripDist,
                     consumption = bundled.first,
                     alpha = bundled.second,
+                    scale = bundled.third,
                 )
             }.collect { snap ->
                 socState.value = snap.data?.soc
@@ -210,12 +253,50 @@ object WidgetController {
                 trendState.value = snap.consumption.trend
                 alphaState.value = snap.alpha
 
+                if (scaleState.value != snap.scale) {
+                    scaleState.value = snap.scale
+                    applyScaleChange(snap.scale)
+                }
+
                 // Hide widget while reverse gear is engaged (issue #5).
                 // DiPars gear: 1=P, 2=R, 3=N, 4=D.
                 val inReverse = snap.data?.gear == 2
                 widgetView?.visibility = if (inReverse) View.GONE else View.VISIBLE
                 if (inReverse) hideTrashZone()
             }
+        }
+    }
+
+    @Synchronized
+    private fun applyScaleChange(scale: Float) {
+        val view = widgetView ?: return
+        val params = widgetParams ?: return
+        val windowManager = wm ?: return
+        val ctx = view.context ?: return
+        val metrics = ctx.resources.displayMetrics
+        val widgetWpx = (dp(ctx, WIDGET_WIDTH_DP) * scale).toInt()
+        val widgetHpx = (dp(ctx, WIDGET_HEIGHT_DP) * scale).toInt()
+        currentWidgetWpx = widgetWpx
+        currentWidgetHpx = widgetHpx
+        // Force-fit the explicit pixel size so WindowManager respects the new
+        // bounds (WRAP_CONTENT alone doesn't re-measure on density override).
+        params.width = widgetWpx
+        params.height = widgetHpx
+        // Re-clamp current position so an enlarged widget doesn't end up off-screen.
+        val (clampedX, clampedY) = DragGestureLogic.clampToScreen(
+            x = params.x,
+            y = params.y,
+            widgetWidth = widgetWpx,
+            widgetHeight = widgetHpx,
+            screenWidth = metrics.widthPixels,
+            screenHeight = metrics.heightPixels,
+        )
+        params.x = clampedX
+        params.y = clampedY
+        try {
+            windowManager.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "updateViewLayout scale: ${e.message}")
         }
     }
 
@@ -226,6 +307,7 @@ object WidgetController {
         val tripDistanceKm: Double?,
         val consumption: ConsumptionState,
         val alpha: Float,
+        val scale: Float,
     )
 
     // --- Trash zone ---
@@ -330,9 +412,13 @@ object WidgetController {
         private val context: Context,
         private val prefs: WidgetPreferences,
         private val metrics: DisplayMetrics,
-        private val widgetWpx: Int,
-        private val widgetHpx: Int,
     ) : android.view.View.OnTouchListener {
+
+        // Read from controller state on each gesture so resize-mid-session
+        // (e.g. user moved the size slider in Settings) doesn't leave us
+        // clamping with stale dimensions.
+        private val widgetWpx: Int get() = currentWidgetWpx
+        private val widgetHpx: Int get() = currentWidgetHpx
 
         private var downX = 0f
         private var downY = 0f

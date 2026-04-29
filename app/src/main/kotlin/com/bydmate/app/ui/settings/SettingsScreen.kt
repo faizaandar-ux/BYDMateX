@@ -43,12 +43,15 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.text.font.FontFamily
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -433,6 +436,24 @@ fun SettingsScreen(
                 val widgetPrefs = remember { WidgetPreferences(widgetCtx) }
                 val widgetEnabled by widgetPrefs.enabledFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.isEnabled())
                 val widgetAlpha by widgetPrefs.alphaFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getAlpha())
+                val widgetScale by widgetPrefs.scaleFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getScale())
+
+                // Drop preview-mode when this screen leaves composition (back / tab switch)
+                // OR when the app goes to background, so an overlay never gets stranded
+                // visible after the user navigated away.
+                val lifecycleOwner = LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_PAUSE) {
+                            WidgetController.setPreviewMode(widgetCtx, false)
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
+                        WidgetController.setPreviewMode(widgetCtx, false)
+                    }
+                }
 
                 SectionHeader(text = "Плавающий виджет")
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 0.dp, vertical = 0.dp)) {
@@ -519,8 +540,46 @@ fun SettingsScreen(
                                 }
                                 Slider(
                                     value = widgetAlpha,
-                                    onValueChange = { widgetPrefs.setAlpha(it) },
+                                    onValueChange = {
+                                        if (widgetEnabled) WidgetController.setPreviewMode(widgetCtx, true)
+                                        widgetPrefs.setAlpha(it)
+                                    },
                                     valueRange = 0.3f..1.0f,
+                                    enabled = widgetEnabled,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = AccentGreen,
+                                        activeTrackColor = AccentGreen,
+                                        inactiveTrackColor = TextMuted.copy(alpha = 0.3f),
+                                        disabledThumbColor = TextMuted,
+                                        disabledActiveTrackColor = TextMuted.copy(alpha = 0.4f),
+                                    ),
+                                )
+                            }
+                            Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Размер",
+                                        color = TextPrimary,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Text(
+                                        text = "${(widgetScale * 100).toInt()}%",
+                                        color = TextMuted,
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                }
+                                Slider(
+                                    value = widgetScale,
+                                    onValueChange = {
+                                        if (widgetEnabled) WidgetController.setPreviewMode(widgetCtx, true)
+                                        widgetPrefs.setScale(it)
+                                    },
+                                    valueRange = WidgetPreferences.SCALE_MIN..WidgetPreferences.SCALE_MAX,
                                     enabled = widgetEnabled,
                                     colors = SliderDefaults.colors(
                                         thumbColor = AccentGreen,

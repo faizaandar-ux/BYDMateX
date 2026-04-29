@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
@@ -33,8 +34,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bydmate.app.domain.calculator.Trend
@@ -69,6 +72,7 @@ fun FloatingWidgetView(
     batTemp: Int?,
     voltage12v: Double?,
     alpha: Float,
+    scaleFactor: Float = 1.0f,
 ) {
     val status = widgetStatus(soc, voltage12v)
     val borderColor = when (status) {
@@ -78,37 +82,45 @@ fun FloatingWidgetView(
         Status.NO_DATA -> TextMuted.copy(alpha = 0.4f)
     }
 
-    Column(
-        modifier = Modifier
-            .alpha(alpha.coerceIn(0.3f, 1.0f))
-            .size(width = 260.dp, height = 108.dp)
-            .shadow(elevation = 8.dp, shape = RoundedCornerShape(14.dp))
-            .background(CardSurface, RoundedCornerShape(14.dp))
-            .border(1.5.dp, borderColor, RoundedCornerShape(14.dp))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        RowTrip(
-            sessionStartedAt = sessionStartedAt,
-            tripDistanceKm = tripDistanceKm,
-            insideTemp = insideTemp,
-        )
-        WidgetDivider()
-        // First 300 m of an active session: the trend stat is still based on the
-        // PREVIOUS trip's buffer (current trip hasn't moved enough to enter the
-        // 2-km short window yet). A confident DOWN/UP arrow here would imply
-        // "your driving right now is going green/red", which misleads the user
-        // when they've just started or are idle. Suppress the trend until they've
-        // actually driven 300 m — by then the buffer has fresh rows for this trip.
-        // The numeric value still renders (Trend.NONE colors it muted gray) so
-        // the user can still eyeball range, just without a confident verdict.
-        val effectiveTrend = if (
-            sessionStartedAt != null &&
-            (tripDistanceKm ?: 0.0) < TRIP_DISTANCE_TREND_THRESHOLD_KM
-        ) Trend.NONE else trend
-        RowEnergy(soc = soc, rangeKm = rangeKm, consumption = consumption, trend = effectiveTrend)
-        WidgetDivider()
-        RowService(batTemp = batTemp, voltage12v = voltage12v)
+    val baseDensity = LocalDensity.current
+    val scaledDensity = Density(
+        density = baseDensity.density * scaleFactor,
+        fontScale = baseDensity.fontScale,
+    )
+
+    CompositionLocalProvider(LocalDensity provides scaledDensity) {
+        Column(
+            modifier = Modifier
+                .alpha(alpha.coerceIn(0.3f, 1.0f))
+                .size(width = 260.dp, height = 108.dp)
+                .shadow(elevation = 8.dp, shape = RoundedCornerShape(14.dp))
+                .background(CardSurface, RoundedCornerShape(14.dp))
+                .border(1.5.dp, borderColor, RoundedCornerShape(14.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            RowTrip(
+                sessionStartedAt = sessionStartedAt,
+                tripDistanceKm = tripDistanceKm,
+                insideTemp = insideTemp,
+            )
+            WidgetDivider()
+            // First 300 m of an active session: the trend stat is still based on the
+            // PREVIOUS trip's buffer (current trip hasn't moved enough to enter the
+            // 2-km short window yet). A confident DOWN/UP arrow here would imply
+            // "your driving right now is going green/red", which misleads the user
+            // when they've just started or are idle. Suppress the trend until they've
+            // actually driven 300 m — by then the buffer has fresh rows for this trip.
+            // The numeric value still renders (Trend.NONE colors it muted gray) so
+            // the user can still eyeball range, just without a confident verdict.
+            val effectiveTrend = if (
+                sessionStartedAt != null &&
+                (tripDistanceKm ?: 0.0) < TRIP_DISTANCE_TREND_THRESHOLD_KM
+            ) Trend.NONE else trend
+            RowEnergy(soc = soc, rangeKm = rangeKm, consumption = consumption, trend = effectiveTrend)
+            WidgetDivider()
+            RowService(batTemp = batTemp, voltage12v = voltage12v)
+        }
     }
 }
 

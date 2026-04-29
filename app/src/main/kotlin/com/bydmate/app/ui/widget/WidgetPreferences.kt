@@ -61,6 +61,22 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
+    fun getScale(): Float = prefs.getFloat(KEY_SCALE, 1.0f)
+
+    fun setScale(scale: Float) {
+        val clamped = scale.coerceIn(SCALE_MIN, SCALE_MAX)
+        prefs.edit().putFloat(KEY_SCALE, clamped).apply()
+    }
+
+    fun scaleFlow(): Flow<Float> = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
+            if (changedKey == KEY_SCALE) trySend(getScale())
+        }
+        trySend(getScale())
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     /**
      * Transient flag: when true, widget stays hidden until user opens MainActivity.
      * Triggered by long-press on the widget. Cleared in onActivityResumed.
@@ -77,6 +93,9 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         const val KEY_X = "widget_x"
         const val KEY_Y = "widget_y"
         const val KEY_ALPHA = "widget_alpha"
+        const val KEY_SCALE = "widget_scale"
         const val KEY_HIDDEN_UNTIL_LAUNCH = "widget_hidden_until_launch"
+        const val SCALE_MIN = 0.7f
+        const val SCALE_MAX = 2.0f
     }
 }
