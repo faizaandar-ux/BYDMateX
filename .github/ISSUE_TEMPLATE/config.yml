@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Поддержать проект
+    url: https://github.com/AndyShaman/BYDMate/blob/main/SUPPORT.md
+    about: Реквизиты для донатов в USDT (TON, TRC20, Solana, BEP20)
