@@ -76,6 +76,10 @@ class TrackingService : Service(), LocationListener {
     private var consecutiveNullCount = 0
     private var firstDataReceived = false
     private var currentPollIntervalMs = POLL_INTERVAL_MS
+    // Last D+ relaunch attempt. Reset to 0 on first successful fetch so a future
+    // outage triggers an immediate retry; otherwise spaced by RELAUNCH_COOLDOWN_MS
+    // to avoid hammering the launcher when D+ is genuinely broken.
+    @Volatile private var lastDiPlusRelaunchTs: Long = 0L
 
     // Widget session (ignition-on → ignition-off) — decoupled from TripTracker GPS state.
     // Primary signal: DiPars powerState ≥ 1. Fallback when powerState is unreliable:
@@ -112,8 +116,11 @@ class TrackingService : Service(), LocationListener {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "bydmate_tracking"
         private const val POLL_INTERVAL_MS = 3000L // 3 seconds for detailed GPS + charging curve
-        private const val NULL_WARNING_THRESHOLD = 5
+        private const val NULL_WARNING_THRESHOLD = 3
         private const val MAX_POLL_INTERVAL_MS = 60_000L
+        // Cool-down between D+ relaunch attempts while it is still silent. Caps
+        // log noise / launcher pressure when D+ refuses to come back up.
+        private const val DIPLUS_RELAUNCH_COOLDOWN_MS = 5L * 60_000L
         // Tolerance between last "session active" tick and the current tick before we
         // consider the session closed. 30 sec survives brief powerState blips and
         // covers the DiLink wind-down after ignition-off.
@@ -445,6 +452,7 @@ class TrackingService : Service(), LocationListener {
                     val data = diParsClient.fetch()
                     if (data != null) {
                         consecutiveNullCount = 0
+                        lastDiPlusRelaunchTs = 0L
                         currentPollIntervalMs = POLL_INTERVAL_MS
                         _diPlusConnected.value = true
                         _lastData.value = data
@@ -568,9 +576,18 @@ class TrackingService : Service(), LocationListener {
                             _diPlusConnected.value = false
                             currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong()
                                 .coerceAtMost(MAX_POLL_INTERVAL_MS)
-                            if (consecutiveNullCount == NULL_WARNING_THRESHOLD) {
-                                Log.w(TAG, "DiPlus API not responding ($NULL_WARNING_THRESHOLD consecutive nulls), backoff to ${currentPollIntervalMs}ms")
+                            val now = System.currentTimeMillis()
+                            if (DiPlusWatchdog.shouldRelaunch(
+                                    failuresCount = consecutiveNullCount,
+                                    threshold = NULL_WARNING_THRESHOLD,
+                                    nowMs = now,
+                                    lastRelaunchTs = lastDiPlusRelaunchTs,
+                                    cooldownMs = DIPLUS_RELAUNCH_COOLDOWN_MS,
+                                )
+                            ) {
+                                Log.w(TAG, "DiPlus silent ($consecutiveNullCount nulls), relaunching (backoff ${currentPollIntervalMs}ms)")
                                 tryLaunchDiPlus()
+                                lastDiPlusRelaunchTs = now
                             }
                         }
                     }
