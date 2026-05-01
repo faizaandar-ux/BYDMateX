@@ -34,14 +34,19 @@ object FidRegistry {
     const val FID_SOC = 1246777400
 
     // === Charging fids (dev=1009) ===
-    /** Charging gun connect state: 1=NONE, 2=AC, 3=DC, 4=GB_DC. */
-    const val FID_GUN_CONNECT_STATE = -1442840496
-    /** Charging type after handshake: 1=DEFAULT/none, 2=AC, 4=GB_DC. */
-    const val FID_CHARGING_TYPE = -1442840495
-    /** Charger HV voltage, V (int). */
+    // Validated against AUTOSERVICE-CATALOG-2026-04-25.md and live AC-charging
+    // 2026-04-30: the legacy `-1442840xxx` group (gun/type/battery_type) returned
+    // sentinel 0xffffd8e5 on every call — phantom values the SentinelDecoder
+    // collapsed to null. The catalog fids below return real codes during charging.
+    /** Charging gun connect state: 1=NONE, 2=AC, 3=DC, 4=AC_DC, 5=VTOL. */
+    const val FID_GUN_CONNECT_STATE = 876609586
+    /** Charging type after handshake: 1=DEFAULT, 2=AC, 3=VTOG, 4=GB_DC, 5=GB_NON_DC. */
+    const val FID_CHARGING_TYPE = 876609592
+    /** Charger HV voltage, V (int). Catalog mapping not yet confirmed — kept stale.
+     *  TODO 2026-04-30: locate canonical fid via catalog before relying on it. */
     const val FID_CHARGE_BATTERY_VOLT = -1442840491
-    /** Battery type: 1=IRON/LFP, 2=NCM. */
-    const val FID_BATTERY_TYPE = -1442840482
+    /** Battery type: 0=LEAD_ACID, 1=IRON/LFP, 65535=INVALID. */
+    const val FID_BATTERY_TYPE = -1728053169
     /** Per-session charged energy, kWh (transact 7=float). Persists across DiLink
      *  power-cycle; resets on new charging session (gun reconnect or BMS reset). */
     const val FID_CHARGING_CAPACITY = 666894360

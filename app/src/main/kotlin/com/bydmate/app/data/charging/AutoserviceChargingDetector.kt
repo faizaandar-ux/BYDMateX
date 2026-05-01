@@ -21,6 +21,7 @@ enum class CatchUpOutcome {
     SENTINEL,
     BASELINE_INITIALIZED,
     NO_DELTA,
+    STILL_CHARGING,
     SESSION_CREATED
 }
 
@@ -120,6 +121,40 @@ class AutoserviceChargingDetector @Inject constructor(
                 android.util.Log.i(TAG, "runCatchUp: cold start, seeded state soc=$currentSoc")
                 _state.value = DetectorState.IDLE
                 return CatchUpResult(CatchUpOutcome.BASELINE_INITIALIZED)
+            }
+
+            // Step 4.5: gun-connected gate — physical charging is still in progress.
+            // Reproduced by user 2026-04-30: car woken up while still on the charger.
+            // SOC had grown across DiLink sleep, runCatchUp would otherwise create a
+            // COMPLETED row and advance the baseline, splitting one real session into
+            // N phantom rows on each ignition cycle. While the gun is inserted, defer
+            // to the live gun-disconnect edge in TrackingService to finalize.
+            //
+            // gun=null is treated as "still charging" only when the autoservice
+            // charging device is otherwise responsive (any sibling fid readable) —
+            // that combination means the gun fid alone glitched, and unblocking
+            // would re-open the same phantom-row regression in a different shape.
+            // When ALL charging fids are silent, the device is unsupported on this
+            // firmware; we fall back to legacy behavior so charge logging is not
+            // permanently blocked on other BYD models.
+            val gun = charging?.gunConnectState
+            // gun=0 is the autoservice "unknown" sentinel — ChargingTypeClassifier
+            // already treats it as null. We mirror that here so a firmware where 0
+            // is the steady-state value doesn't permanently block charge logging.
+            val gunResolved = gun?.takeIf { it != 0 }
+            val gunIsConnected = gunResolved != null && gunResolved != GUN_STATE_NONE
+            val chargingDeviceReadable = charging != null && (
+                charging.chargingType != null ||
+                    charging.batteryType != null ||
+                    charging.bmsState != null ||
+                    charging.chargingCapacityKwh != null ||
+                    charging.chargeBatteryVoltV != null
+                )
+            val gunGlitch = gunResolved == null && chargingDeviceReadable
+            if (gunIsConnected || gunGlitch) {
+                android.util.Log.i(TAG, "runCatchUp: gun=$gun, deviceReadable=$chargingDeviceReadable → STILL_CHARGING (defer to live edge)")
+                _state.value = DetectorState.IDLE
+                return CatchUpResult(CatchUpOutcome.STILL_CHARGING)
             }
 
             // Step 5: SOC delta gate — the regression-fix gate. NEVER create a row when SOC

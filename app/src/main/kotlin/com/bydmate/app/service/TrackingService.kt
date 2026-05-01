@@ -68,6 +68,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var socInterpolator: SocInterpolator
     @Inject lateinit var rangeCalculator: RangeCalculator
     @Inject lateinit var autoserviceDetector: com.bydmate.app.data.charging.AutoserviceChargingDetector
+    @Inject lateinit var autoserviceClient: com.bydmate.app.data.autoservice.AutoserviceClient
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
 
@@ -103,21 +104,43 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var cachedLastTripAvg: Double? = null
 
     private var lastSummaryLogTs: Long = 0L
-    // Live charging-end detector state. The cascade detector ran only on
-    // service start in v2.4.17, missing every charge that completed while
-    // BYDMate was already running (Ready mode). We track gun-connect state
-    // across polls and fire runCatchUp once on the gun: connected→disconnected
-    // edge. observedChargingPowerKwAbs carries the peak |power| seen during
-    // the session so AC/DC classification doesn't have to fall back to the
+    // Live charging-end detector. We track gun-connect state across polls and
+    // fire runCatchUp on the connected→disconnected edge. The gun signal is
+    // sourced from autoservice (system SDK) — DiPlus' chargeGunState is
+    // unreliable on Leopard 3 because DiPlus often runs in reduced-payload
+    // mode and omits the field entirely (v2.5.10 regression). A separate
+    // counter throttles autoservice reads to once every
+    // GUN_STATE_POLL_EVERY_N_TICKS ticks (~15 s at the 3-s base interval).
+    // observedChargingPowerKwAbs carries the peak |power| seen during the
+    // session so AC/DC classification doesn't have to fall back to the
     // kwh/hours heuristic for short sessions.
-    @Volatile private var prevChargeGunState: Int? = null
-    @Volatile private var observedChargingPowerKwAbs: Double = 0.0
+    private val gunEdgeDetector = com.bydmate.app.data.charging.GunStateEdgeDetector()
+    // Power accumulator + lock. We guard read/compare/write so that the main
+    // poll loop (peak update) cannot interleave with the edge-coroutine's
+    // read-and-reset; otherwise a peak written between read and reset would
+    // be silently dropped, and AC/DC classification would fall back to the
+    // kwh/hours heuristic. Lock is held for microseconds — main loop is not
+    // meaningfully blocked.
+    private val powerLock = Any()
+    private var observedChargingPowerKwAbs: Double = 0.0
+    private var pollTickCount: Long = 0
+    // Prevents two pollGunStateForEdge coroutines from running concurrently.
+    // Without this guard a slow autoservice read could overlap with the next
+    // tick's launch, and both copies might observe the same connected→NONE
+    // transition (gunEdgeDetector.onSample is not synchronized — @Volatile
+    // gives visibility, not atomicity).
+    private val pollGunInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
         private const val TAG = "TrackingService"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "bydmate_tracking"
         private const val POLL_INTERVAL_MS = 3000L // 3 seconds for detailed GPS + charging curve
+        // Throttle autoservice gun-state read so we don't hit Binder/ADB on every
+        // 3-second poll. 5 ticks ≈ 15 s — fast enough that the user sees a row
+        // appear within ~half a minute of unplugging, gentle enough not to
+        // contend with battery / charging snapshot reads.
+        private const val GUN_STATE_POLL_EVERY_N_TICKS = 5
         private const val NULL_WARNING_THRESHOLD = 3
         private const val MAX_POLL_INTERVAL_MS = 60_000L
         // Cool-down between D+ relaunch attempts while it is still silent. Caps
@@ -479,33 +502,32 @@ class TrackingService : Service(), LocationListener {
                             settingsRepository.saveLastKnownSoc(soc)
                         }
 
-                        // Live end-of-charging detection. Track the connected→disconnected
-                        // edge on chargeGunState. While the gun is connected and energy is
-                        // flowing in (Power < 0), remember the peak |power| for AC/DC.
-                        val curGun = data.chargeGunState
-                        if (curGun == 2 && (data.power ?: 0.0) < 0.0) {
+                        // Power accumulator for AC/DC classification. DiPars `power` is
+                        // negative while energy flows IN; we keep the peak |power| seen
+                        // during the session and hand it to runCatchUp on the disconnect
+                        // edge so short sessions don't fall back to the kwh/hours
+                        // heuristic. When DiPlus is in reduced-payload mode (no `Power`
+                        // field), this accumulator simply stays at 0 and the heuristic
+                        // takes over — runCatchUp tolerates a null observedKwAbs.
+                        if ((data.power ?: 0.0) < 0.0) {
                             val abs = -(data.power ?: 0.0)
-                            if (abs > observedChargingPowerKwAbs) observedChargingPowerKwAbs = abs
-                        }
-                        if (prevChargeGunState == 2 && curGun != null && curGun != 2) {
-                            val powerForClassify = observedChargingPowerKwAbs.takeIf { it > 0.0 }
-                            observedChargingPowerKwAbs = 0.0
-                            serviceScope.launch {
-                                try {
-                                    val outcome = autoserviceDetector.runCatchUp(
-                                        observedKwAbs = powerForClassify
-                                    )
-                                    Log.i(TAG, "Live end-of-charging catch-up: ${outcome.outcome}")
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Live end-of-charging failed: ${e.message}")
-                                }
+                            synchronized(powerLock) {
+                                if (abs > observedChargingPowerKwAbs) observedChargingPowerKwAbs = abs
                             }
                         }
-                        // Only update prev when DiPars actually returned a gun state.
-                        // A null response is a transient read failure, not a transition —
-                        // keeping the previous value lets the disconnect edge fire on the
-                        // next non-null poll instead of being silently swallowed.
-                        if (curGun != null) prevChargeGunState = curGun
+
+                        // Live end-of-charging via autoservice gun state. Throttled to
+                        // every Nth tick because each Binder/ADB round-trip is heavy.
+                        // We launch the read in its own coroutine so a slow autoservice
+                        // call cannot delay the next DiPars poll. Edge detection state
+                        // lives in gunEdgeDetector; runCatchUp's mutex serializes us
+                        // against the cold-start path.
+                        pollTickCount++
+                        if (pollTickCount % GUN_STATE_POLL_EVERY_N_TICKS == 0L) {
+                            serviceScope.launch {
+                                pollGunStateForEdge()
+                            }
+                        }
 
                         // On first data after startup: detect offline charging
                         if (!firstDataReceived) {
@@ -610,6 +632,46 @@ class TrackingService : Service(), LocationListener {
                 }
                 delay(currentPollIntervalMs)
             }
+        }
+    }
+
+    /**
+     * Read the autoservice gun-connect-state and, when it crosses
+     * connected→disconnected, fire a runCatchUp so the just-finished session
+     * is written as a row. Runs on Dispatchers.IO via serviceScope.
+     *
+     * autoservice availability is checked by the detector itself; we still
+     * gate on the user setting so that turning autoservice off in Settings
+     * also stops the live polling.
+     */
+    private suspend fun pollGunStateForEdge() {
+        if (!pollGunInFlight.compareAndSet(false, true)) return
+        try {
+            if (!settingsRepository.isAutoserviceEnabled()) return
+            val gun = try {
+                autoserviceClient.getInt(
+                    com.bydmate.app.data.autoservice.FidRegistry.DEV_CHARGING,
+                    com.bydmate.app.data.autoservice.FidRegistry.FID_GUN_CONNECT_STATE
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "pollGunStateForEdge: read failed: ${e.message}")
+                return
+            }
+            val edge = gunEdgeDetector.onSample(gun)
+            if (!edge) return
+            val powerForClassify = synchronized(powerLock) {
+                val v = observedChargingPowerKwAbs.takeIf { it > 0.0 }
+                observedChargingPowerKwAbs = 0.0
+                v
+            }
+            try {
+                val outcome = autoserviceDetector.runCatchUp(observedKwAbs = powerForClassify)
+                Log.i(TAG, "Live end-of-charging (autoservice gun edge): ${outcome.outcome}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Live end-of-charging failed: ${e.message}")
+            }
+        } finally {
+            pollGunInFlight.set(false)
         }
     }
 

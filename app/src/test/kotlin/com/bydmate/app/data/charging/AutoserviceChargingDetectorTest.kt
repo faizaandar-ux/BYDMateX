@@ -381,30 +381,6 @@ class AutoserviceChargingDetectorTest {
     }
 
     @Test
-    fun `gate A gun DC overrides AC heuristic`() = runTest {
-        val setup = build(
-            battery = battery(soc = 91f),
-            charging = ChargingReading(
-                gunConnectState = 3,   // DC gun still inserted
-                chargingType = 4, chargeBatteryVoltV = 700,
-                batteryType = 1, chargingCapacityKwh = 8.0f, bmsState = 1, readAtMs = 1000L
-            ),
-            prevSoc = 80,
-            prevCapacityKwh = 0.0f,
-            dcTariff = 0.73
-        )
-
-        setup.detector.runCatchUp(now = 1500L)
-
-        val ch = setup.chargeDao.inserted.single()
-        assertEquals("DC", ch.type)
-        assertEquals(3, ch.gunState)
-        // cost = 8.0 * 0.73 = 5.84
-        assertEquals(5.84, ch.cost!!, 0.01)
-        assertEquals("autoservice_cap_delta", ch.detectionSource)
-    }
-
-    @Test
     fun `BatterySnapshot recorded when SOC delta is 5 or more`() = runTest {
         // socStart=80, socEnd=91, delta=11 >= 5 → snapshot inserted
         val setup = build(
@@ -470,6 +446,166 @@ class AutoserviceChargingDetectorTest {
         val state = setup.stateStore.load()
         assertEquals(95, state.socPercent)
         assertEquals(10.0f, state.capacityKwh!!, 0.01f)
+    }
+
+    @Test
+    fun `gun still connected during catch-up returns STILL_CHARGING and state NOT updated`() = runTest {
+        // Reproduces the user-reported bug: car woken up while still on charger.
+        // SOC grew (30 → 70) while DiLink was asleep, but the gun is still
+        // physically inserted (gunConnectState=2 / AC). runCatchUp must NOT
+        // create a COMPLETED row and must NOT advance the baseline — we wait
+        // for the live gun-disconnect edge to finalize the session.
+        val setup = build(
+            battery = battery(soc = 70f),
+            charging = charging(capKwh = 25.0f, gunState = 2),
+            prevSoc = 30,
+            prevCapacityKwh = 0.0f
+        )
+
+        val result = setup.detector.runCatchUp(now = 1500L)
+
+        assertEquals(CatchUpOutcome.STILL_CHARGING, result.outcome)
+        assertEquals(0, setup.chargeDao.inserted.size)
+        assertEquals(0, setup.snapshotDao.inserted.size)
+        // Baseline must stay on the pre-charge anchor so the next live edge
+        // captures the full delta from the original start.
+        val state = setup.stateStore.load()
+        assertEquals(30, state.socPercent)
+        assertEquals(0.0f, state.capacityKwh!!, 0.001f)
+    }
+
+    @Test
+    fun `gun connected DC during catch-up returns STILL_CHARGING`() = runTest {
+        // Same gate must trigger for any non-NONE gun state (3=DC, 4=GB_DC).
+        val setup = build(
+            battery = battery(soc = 70f),
+            charging = charging(capKwh = 25.0f, gunState = 3),
+            prevSoc = 30,
+            prevCapacityKwh = 0.0f
+        )
+
+        val result = setup.detector.runCatchUp(now = 1500L)
+
+        assertEquals(CatchUpOutcome.STILL_CHARGING, result.outcome)
+        assertEquals(0, setup.chargeDao.inserted.size)
+    }
+
+    @Test
+    fun `gun null but other charging fids readable returns STILL_CHARGING`() = runTest {
+        // The gun fid can sentinel-out for one read while sibling fids
+        // (chargingType, batteryType, capacityKwh, bmsState) keep returning
+        // valid values — that's a transient glitch on the gun fid alone,
+        // not a sign that the gun is physically disconnected. Letting cascades
+        // run in this state would re-open the same phantom-row bug we just
+        // fixed, just on a different trigger. Block it.
+        val setup = build(
+            battery = battery(soc = 91f),
+            charging = ChargingReading(
+                gunConnectState = null,
+                chargingType = 2, chargeBatteryVoltV = 0,
+                batteryType = 1, chargingCapacityKwh = 8.0f,
+                bmsState = null, readAtMs = 1000L
+            ),
+            prevSoc = 80,
+            prevCapacityKwh = 0.0f
+        )
+
+        val result = setup.detector.runCatchUp(now = 1500L)
+
+        assertEquals(CatchUpOutcome.STILL_CHARGING, result.outcome)
+        assertEquals(0, setup.chargeDao.inserted.size)
+        // baseline must not advance while we're still uncertain
+        val state = setup.stateStore.load()
+        assertEquals(80, state.socPercent)
+    }
+
+    @Test
+    fun `gun null with only bmsState readable also returns STILL_CHARGING`() = runTest {
+        // Even a single readable sibling fid is enough evidence that the
+        // charging device is alive and the gun fid alone glitched.
+        val setup = build(
+            battery = battery(soc = 91f),
+            charging = ChargingReading(
+                gunConnectState = null,
+                chargingType = null, chargeBatteryVoltV = null,
+                batteryType = null, chargingCapacityKwh = null,
+                bmsState = 5, readAtMs = 1000L
+            ),
+            prevSoc = 80,
+            prevCapacityKwh = 0.0f
+        )
+
+        val result = setup.detector.runCatchUp(now = 1500L)
+
+        assertEquals(CatchUpOutcome.STILL_CHARGING, result.outcome)
+        assertEquals(0, setup.chargeDao.inserted.size)
+    }
+
+    @Test
+    fun `gun 0 unknown with readable siblings returns STILL_CHARGING`() = runTest {
+        // gun=0 is autoservice "unknown" sentinel (matches ChargingTypeClassifier).
+        // Mirror null-handling so unknown gun on a working device still defers.
+        val setup = build(
+            battery = battery(soc = 91f),
+            charging = ChargingReading(
+                gunConnectState = 0,
+                chargingType = 2, chargeBatteryVoltV = 0,
+                batteryType = 1, chargingCapacityKwh = 8.0f,
+                bmsState = null, readAtMs = 1000L
+            ),
+            prevSoc = 80,
+            prevCapacityKwh = 0.0f
+        )
+
+        val result = setup.detector.runCatchUp(now = 1500L)
+
+        assertEquals(CatchUpOutcome.STILL_CHARGING, result.outcome)
+        assertEquals(0, setup.chargeDao.inserted.size)
+    }
+
+    @Test
+    fun `gun 0 unknown with ALL siblings null falls back to legacy behavior`() = runTest {
+        // gun=0 must not permanently block charge logging when the entire
+        // charging device is silent on this firmware — same fallback as null gun.
+        val setup = build(
+            battery = battery(soc = 91f),
+            charging = ChargingReading(
+                gunConnectState = 0,
+                chargingType = null, chargeBatteryVoltV = null,
+                batteryType = null, chargingCapacityKwh = null,
+                bmsState = null, readAtMs = 1000L
+            ),
+            prevSoc = 80,
+            prevCapacityKwh = 0.0f
+        )
+
+        val result = setup.detector.runCatchUp(now = 1500L)
+
+        assertEquals(CatchUpOutcome.SESSION_CREATED, result.outcome)
+        assertEquals(1, setup.chargeDao.inserted.size)
+    }
+
+    @Test
+    fun `gun null and ALL charging fids null falls back to legacy behavior`() = runTest {
+        // Firmware where the entire charging device is unsupported — keep
+        // catch-up working so other BYD models don't permanently lose the
+        // ability to log charges. cap=8.0 + socDelta=11 → SESSION_CREATED.
+        val setup = build(
+            battery = battery(soc = 91f),
+            charging = ChargingReading(
+                gunConnectState = null,
+                chargingType = null, chargeBatteryVoltV = null,
+                batteryType = null, chargingCapacityKwh = null,
+                bmsState = null, readAtMs = 1000L
+            ),
+            prevSoc = 80,
+            prevCapacityKwh = 0.0f
+        )
+
+        val result = setup.detector.runCatchUp(now = 1500L)
+
+        assertEquals(CatchUpOutcome.SESSION_CREATED, result.outcome)
+        assertEquals(1, setup.chargeDao.inserted.size)
     }
 
     @Test
