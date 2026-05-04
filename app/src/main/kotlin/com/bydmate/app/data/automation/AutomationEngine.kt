@@ -40,6 +40,7 @@ class AutomationEngine @Inject constructor(
     private val ruleLogDao: RuleLogDao,
     private val actionDispatcher: ActionDispatcher,
     private val placeRepository: PlaceRepository,
+    private val networkAvailableMonitor: NetworkAvailableMonitor,
     @ApplicationContext private val context: Context
 ) {
     companion object {
@@ -59,6 +60,11 @@ class AutomationEngine @Inject constructor(
     private val lastEvalResults = ConcurrentHashMap<Long, Boolean>()
     // Once-per-trip gate: ruleId -> tripStartedAt captured when rule last fired
     private val lastFiredTripByRule = ConcurrentHashMap<Long, Long>()
+    // Per-rule consumption marker for the network_available trigger. Tracks the
+    // most recent NetworkAvailableMonitor.lastAvailableAt that this rule has
+    // already responded to, so a single VALIDATED edge fires the rule at most
+    // once even if the rule's other AND-conditions delay the actual fire.
+    private val lastSeenNetworkAvailableAt = ConcurrentHashMap<Long, Long>()
     // Service-start trigger: true on the very first evaluate() call after process
     // start, then flipped to false. Lets the "Запуск BYDMate" trigger fire exactly
     // once per service lifecycle without going through edge-detection (which would
@@ -96,8 +102,34 @@ class AutomationEngine @Inject constructor(
         val rules = ruleDao.getEnabled()
         val now = System.currentTimeMillis()
 
+        // Prune per-rule state for rules that have been deleted (or disabled
+        // and removed from the active set). Without this, `lastEvalResults`,
+        // `lastFiredTripByRule` and `lastSeenNetworkAvailableAt` would grow
+        // monotonically over the app lifetime as the user creates and removes
+        // rules. O(rules) per tick — negligible at typical N (≤ a few dozen).
+        val activeIds = rules.mapTo(HashSet()) { it.id }
+        lastEvalResults.keys.retainAll(activeIds)
+        lastFiredTripByRule.keys.retainAll(activeIds)
+        lastSeenNetworkAvailableAt.keys.retainAll(activeIds)
+
         for (rule in rules) {
             try {
+                val triggers = TriggerDef.listFromJson(rule.triggers)
+                if (triggers.isEmpty()) continue
+
+                // network_available is an event trigger (like service_start) — fire when
+                // VALIDATED internet edge happened that this rule has not consumed yet.
+                // We CONSUME the edge eagerly (before cooldown / park-mode / matched
+                // checks) so a stale edge can't fire later when the AND-condition or
+                // cooldown finally permits. Edge semantics: network-validated is a
+                // moment-in-time signal, not a persistent state.
+                val networkEdgeAt = networkAvailableMonitor.lastAvailableAt
+                val previouslySeenNetworkAt = lastSeenNetworkAvailableAt[rule.id] ?: 0L
+                val networkEdge = networkEdgeAt > 0L && networkEdgeAt > previouslySeenNetworkAt
+                if (networkEdge) {
+                    lastSeenNetworkAvailableAt[rule.id] = networkEdgeAt
+                }
+
                 // Cooldown
                 val lastFired = rule.lastTriggeredAt ?: 0L
                 if (now - lastFired < rule.cooldownSeconds * 1000L) continue
@@ -105,18 +137,19 @@ class AutomationEngine @Inject constructor(
                 // Park-only rule
                 if (rule.requirePark && data.gear != 1) continue
 
-                val triggers = TriggerDef.listFromJson(rule.triggers)
-                if (triggers.isEmpty()) continue
+                val perTrigger = evaluateEachTrigger(triggers, data, location, placesById, justStarted, networkEdge)
+                val matched = combineByLogic(perTrigger, rule.triggerLogic)
 
-                val matched = evaluateTriggers(triggers, data, rule.triggerLogic, location, placesById, justStarted)
-
-                // Service-start triggers are events, not conditions — they bypass edge
-                // detection: a "Запуск BYDMate" trigger that's matched on first eval
-                // must fire, even though there's no false→true transition history.
-                val hasServiceStart = triggers.any { it.kind == "service_start" }
-                if (hasServiceStart) {
+                // Event-style triggers (service_start, network_available) bypass edge
+                // detection ONLY when the matched=true was driven by the event itself.
+                // Without this discriminator, a rule like `network_available OR speed > 50`
+                // would fire every poll where speed > 50 (after cooldown), because the
+                // bypass branch would see `hasEventTrigger=true` regardless of whether
+                // the event actually contributed to the match.
+                val matchedViaEvent = matchedViaEventTrigger(triggers, perTrigger, rule.triggerLogic)
+                if (matchedViaEvent) {
                     lastEvalResults[rule.id] = matched
-                    if (!justStarted || !matched) continue
+                    if (!matched) continue
                 } else {
                     val previous = lastEvalResults.put(rule.id, matched)
                     if (previous == null) continue          // first observation — seed only, do not fire
@@ -179,30 +212,54 @@ class AutomationEngine @Inject constructor(
 
     // --- Trigger evaluation ---
 
-    private fun evaluateTriggers(
+    private fun evaluateEachTrigger(
         triggers: List<TriggerDef>,
         data: DiParsData,
-        logic: String,
         location: Location?,
         places: Map<Long, PlaceEntity>,
-        isFirstEval: Boolean
-    ): Boolean {
-        val results = triggers.map { trigger ->
-            when (trigger.kind) {
-                "place_enter" -> evaluatePlace(trigger, location, places, enterKind = true)
-                "place_exit" -> evaluatePlace(trigger, location, places, enterKind = false)
-                "time_of_day" -> evaluateTimeOfDay(trigger, location)
-                "service_start" -> isFirstEval
-                else -> { // "param" (default)
-                    val actual = getParamValue(data, trigger.param) ?: return@map false
-                    val expected = trigger.value.toDoubleOrNull() ?: return@map false
-                    compare(actual, trigger.operator, expected)
-                }
+        isFirstEval: Boolean,
+        networkAvailableEdge: Boolean
+    ): List<Boolean> = triggers.map { trigger ->
+        when (trigger.kind) {
+            "place_enter" -> evaluatePlace(trigger, location, places, enterKind = true)
+            "place_exit" -> evaluatePlace(trigger, location, places, enterKind = false)
+            "time_of_day" -> evaluateTimeOfDay(trigger, location)
+            "service_start" -> isFirstEval
+            "network_available" -> networkAvailableEdge
+            else -> { // "param" (default)
+                val actual = getParamValue(data, trigger.param) ?: return@map false
+                val expected = trigger.value.toDoubleOrNull() ?: return@map false
+                compare(actual, trigger.operator, expected)
             }
         }
+    }
+
+    private fun combineByLogic(results: List<Boolean>, logic: String): Boolean = when (logic) {
+        "OR" -> results.any { it }
+        else -> results.all { it }
+    }
+
+    /**
+     * Determines whether the rule's matched=true was actually driven by an event
+     * trigger (service_start / network_available), so the bypass-edge-detection
+     * branch only fires for genuine events. Without this gate, a rule like
+     * `network_available OR speed > 50` would re-fire on every poll where speed
+     * exceeds 50 (after cooldown), because the bypass logic would see a present
+     * event-trigger regardless of whether the event itself contributed.
+     */
+    private fun matchedViaEventTrigger(
+        triggers: List<TriggerDef>,
+        perTrigger: List<Boolean>,
+        logic: String
+    ): Boolean {
+        val eventKinds = setOf("service_start", "network_available")
         return when (logic) {
-            "OR" -> results.any { it }
-            else -> results.all { it }
+            // OR: at least one event-trigger must be true on its own.
+            "OR" -> triggers.zip(perTrigger).any { (t, r) -> r && t.kind in eventKinds }
+            // AND: every trigger must be true; if at least one of them is an
+            // event, the whole composition fires only when that event was true,
+            // so the rule is event-driven.
+            else -> triggers.any { it.kind in eventKinds } && perTrigger.all { it }
         }
     }
 
@@ -333,6 +390,7 @@ class AutomationEngine @Inject constructor(
                 "place_exit" -> json.put("place_exit", t.placeName ?: "?")
                 "time_of_day" -> json.put("time_of_day", t.value)
                 "service_start" -> json.put("service_start", true)
+                "network_available" -> json.put("network_available", true)
                 else -> json.put(t.param, getParamValue(data, t.param) ?: JSONObject.NULL)
             }
         }

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -433,6 +434,9 @@ private fun EditorDialog(
                             },
                             onAddServiceStart = {
                                 onUpdate { copy(triggers = triggers + newServiceStartTrigger()) }
+                            },
+                            onAddNetworkAvailable = {
+                                onUpdate { copy(triggers = triggers + newNetworkAvailableTrigger()) }
                             }
                         )
                     }
@@ -621,6 +625,7 @@ private fun TriggerRow(
             "place_enter", "place_exit" -> PlaceTriggerControls(trigger, places, onUpdate)
             "time_of_day" -> TimeOfDayTriggerControls(trigger, onUpdate)
             "service_start" -> ServiceStartTriggerControls()
+            "network_available" -> NetworkAvailableTriggerControls()
             else -> ParamTriggerControls(trigger, onUpdate)
         }
 
@@ -861,6 +866,23 @@ private fun ServiceStartTriggerControls() {
     Spacer(Modifier.width(6.dp))
     Text(
         "Запуск BYDMate",
+        fontSize = 13.sp,
+        color = AccentGreen,
+        fontWeight = FontWeight.Bold
+    )
+}
+
+@Composable
+private fun NetworkAvailableTriggerControls() {
+    Icon(
+        Icons.Outlined.Wifi,
+        contentDescription = null,
+        tint = AccentGreen,
+        modifier = Modifier.size(16.dp)
+    )
+    Spacer(Modifier.width(6.dp))
+    Text(
+        "Доступен интернет",
         fontSize = 13.sp,
         color = AccentGreen,
         fontWeight = FontWeight.Bold
@@ -2176,7 +2198,8 @@ private fun AddTriggerButton(
     onAddParam: () -> Unit,
     onAddPlace: (PlaceEntity) -> Unit,
     onAddTimeOfDay: () -> Unit,
-    onAddServiceStart: () -> Unit
+    onAddServiceStart: () -> Unit,
+    onAddNetworkAvailable: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -2229,6 +2252,13 @@ private fun AddTriggerButton(
                     onAddServiceStart()
                 }
             )
+            DropdownMenuItem(
+                text = { Text("Доступен интернет", fontSize = 13.sp) },
+                onClick = {
+                    menuExpanded = false
+                    onAddNetworkAvailable()
+                }
+            )
         }
     }
 }
@@ -2254,6 +2284,17 @@ private fun newServiceStartTrigger(): TriggerDef {
         value = "true",
         displayName = "Запуск BYDMate",
         kind = "service_start"
+    )
+}
+
+private fun newNetworkAvailableTrigger(): TriggerDef {
+    return TriggerDef(
+        param = "NetworkAvailable",
+        chineseName = "网络可用",
+        operator = "==",
+        value = "true",
+        displayName = "Доступен интернет",
+        kind = "network_available"
     )
 }
 

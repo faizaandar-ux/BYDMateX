@@ -62,6 +62,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var settingsRepository: com.bydmate.app.data.repository.SettingsRepository
     @Inject lateinit var insightsManager: com.bydmate.app.data.remote.InsightsManager
     @Inject lateinit var automationEngine: AutomationEngine
+    @Inject lateinit var networkAvailableMonitor: com.bydmate.app.data.automation.NetworkAvailableMonitor
     @Inject lateinit var alicePollingManager: AlicePollingManager
     @Inject lateinit var odometerBuffer: OdometerConsumptionBuffer
     @Inject lateinit var liveTripBuffer: LiveTripBuffer
@@ -255,6 +256,9 @@ class TrackingService : Service(), LocationListener {
             Log.d(TAG, "Initial cachedLastTripAvg on service start: $cachedLastTripAvg")
         }
 
+        // Start the network monitor BEFORE polling so the first evaluate() tick
+        // already has access to the latest VALIDATED edge state.
+        networkAvailableMonitor.start()
         startPolling()
         startCameraMonitor()
         _isRunning.value = true
@@ -426,6 +430,7 @@ class TrackingService : Service(), LocationListener {
         alicePollingManager.stop()
         cameraStateMonitor.stop()
         _cameraActive.value = false
+        networkAvailableMonitor.stop()
         automationEngine.shutdown()
         serviceScope.cancel()
 
