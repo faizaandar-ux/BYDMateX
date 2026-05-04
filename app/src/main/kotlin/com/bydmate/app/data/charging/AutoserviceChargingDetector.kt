@@ -101,12 +101,30 @@ class AutoserviceChargingDetector @Inject constructor(
             val battery = client.readBatterySnapshot()
             val charging = client.readChargingSnapshot()
 
-            // Step 3: SOC sentinel check
-            val currentSoc = battery?.socPercent?.toInt()
-            if (currentSoc == null) {
-                android.util.Log.i(TAG, "runCatchUp: socPercent sentinel — BMS not initialized")
-                _state.value = DetectorState.IDLE
-                return CatchUpResult(CatchUpOutcome.SENTINEL)
+            // Step 3: SOC sentinel check with DiPars fallback.
+            // The autoservice SOC fid can sentinel-out for several reasons:
+            //   - cold-start window: TrackingService runs catch-up before
+            //     autoservice has warmed its fid cache (observed 2026-04-30).
+            //   - 100% balancing: BMS may temporarily detach some telemetry
+            //     fids while equalizing cells (per car manual).
+            // DiPars lives in a separate process with its own cache and
+            // typically holds the last-known SOC across both windows. When
+            // it has a valid 0..100 value, we use it as the SOC source so
+            // catch-up does not lose a real charging session.
+            val autoSoc = battery?.socPercent?.toInt()
+            val currentSoc: Int = if (autoSoc != null) {
+                autoSoc
+            } else {
+                val diParsSoc = runCatching { diParsClient.fetch() }.getOrNull()
+                    ?.soc?.takeIf { it in 0..100 }
+                if (diParsSoc != null) {
+                    android.util.Log.i(TAG, "runCatchUp: autoservice SOC sentinel → DiPars fallback soc=$diParsSoc")
+                    diParsSoc
+                } else {
+                    android.util.Log.i(TAG, "runCatchUp: socPercent sentinel from BOTH autoservice AND DiPars")
+                    _state.value = DetectorState.IDLE
+                    return CatchUpResult(CatchUpOutcome.SENTINEL)
+                }
             }
 
             // Step 4: load previous state; seed on cold start
