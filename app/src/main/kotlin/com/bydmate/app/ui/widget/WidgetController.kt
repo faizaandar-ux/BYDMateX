@@ -45,6 +45,12 @@ object WidgetController {
     private const val DRAG_THRESHOLD_DP = 8
     private const val TRASH_RADIUS_DP = 48
     private const val LONG_PRESS_MS = 1500L
+    // Tap on the left third of the widget launches Yandex Navigator if
+    // installed; the right two thirds keep the historical behaviour
+    // (open BYDMate). Threshold uses the live view width, so it stays
+    // proportional across the 70-200% widget size range.
+    private const val YANDEX_NAVI_PACKAGE = "ru.yandex.yandexnavi"
+    private const val LEFT_TAP_FRACTION = 1f / 3f
 
     @Volatile private var appForegrounded: Boolean = false
     @Volatile private var previewMode: Boolean = false
@@ -518,12 +524,27 @@ object WidgetController {
                     val wasTap = DragGestureLogic.isTap(0, 0, dx, dy, thresholdPx)
 
                     if (wasTap) {
-                        // Tap → launch MainActivity
+                        // Tap zoning is opt-in via WidgetPreferences. Default: a tap
+                        // anywhere opens BYDMate. When the user has flipped the
+                        // setting on, the LEFT third launches Yandex Navigator (if
+                        // installed; otherwise the tap is a no-op so we don't fall
+                        // back to BYDMate, which would be confusing). The right two
+                        // thirds always open BYDMate. event.x is relative to the
+                        // touched view, so the boundary follows the live widget
+                        // size after the user's resize setting.
+                        val width = v.width
+                        val isLeftTap = prefs.isLeftTapNavigatorEnabled() &&
+                            width > 0 && event.x < width * LEFT_TAP_FRACTION
                         try {
-                            val intent = Intent(context, MainActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            val intent: Intent? = if (isLeftTap) {
+                                context.packageManager.getLaunchIntentForPackage(YANDEX_NAVI_PACKAGE)
+                            } else {
+                                Intent(context, MainActivity::class.java)
                             }
-                            context.startActivity(intent)
+                            if (intent != null) {
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                context.startActivity(intent)
+                            }
                         } catch (e: Exception) {
                             Log.w(TAG, "tap launch failed: ${e.message}")
                         }

@@ -437,6 +437,7 @@ fun SettingsScreen(
                 val widgetEnabled by widgetPrefs.enabledFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.isEnabled())
                 val widgetAlpha by widgetPrefs.alphaFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getAlpha())
                 val widgetScale by widgetPrefs.scaleFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.getScale())
+                val widgetLeftTapNav by widgetPrefs.leftTapNavigatorFlow().collectAsStateWithLifecycle(initialValue = widgetPrefs.isLeftTapNavigatorEnabled())
 
                 // Drop preview-mode when this screen leaves composition (back / tab switch)
                 // OR when the app goes to background, so an overlay never gets stranded
@@ -588,6 +589,29 @@ fun SettingsScreen(
                                         disabledThumbColor = TextMuted,
                                         disabledActiveTrackColor = TextMuted.copy(alpha = 0.4f),
                                     ),
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Левая треть — Яндекс Навигатор",
+                                        color = TextPrimary,
+                                        fontSize = 13.sp,
+                                    )
+                                    Text(
+                                        text = "Тап по левой части виджета открывает Навигатор, остальное — BYDMate.",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                                Switch(
+                                    checked = widgetLeftTapNav,
+                                    onCheckedChange = { widgetPrefs.setLeftTapNavigatorEnabled(it) },
+                                    enabled = widgetEnabled,
+                                    colors = bydSwitchColors(),
                                 )
                             }
                         }

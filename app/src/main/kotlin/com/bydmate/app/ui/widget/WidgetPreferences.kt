@@ -87,6 +87,27 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         prefs.edit().putBoolean(KEY_HIDDEN_UNTIL_LAUNCH, hidden).apply()
     }
 
+    /**
+     * When true, a short tap on the LEFT third of the widget launches Yandex
+     * Navigator (if installed); the rest opens BYDMate. When false (default),
+     * a tap anywhere on the widget opens BYDMate — the historical behaviour.
+     */
+    fun isLeftTapNavigatorEnabled(): Boolean =
+        prefs.getBoolean(KEY_LEFT_TAP_NAVIGATOR, false)
+
+    fun setLeftTapNavigatorEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LEFT_TAP_NAVIGATOR, enabled).apply()
+    }
+
+    fun leftTapNavigatorFlow(): Flow<Boolean> = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
+            if (changedKey == KEY_LEFT_TAP_NAVIGATOR) trySend(isLeftTapNavigatorEnabled())
+        }
+        trySend(isLeftTapNavigatorEnabled())
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     companion object {
         const val PREFS_NAME = "bydmate_widget"
         const val KEY_ENABLED = "floating_widget_enabled"
@@ -95,6 +116,7 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         const val KEY_ALPHA = "widget_alpha"
         const val KEY_SCALE = "widget_scale"
         const val KEY_HIDDEN_UNTIL_LAUNCH = "widget_hidden_until_launch"
+        const val KEY_LEFT_TAP_NAVIGATOR = "widget_left_tap_navigator"
         const val SCALE_MIN = 0.7f
         const val SCALE_MAX = 2.0f
     }

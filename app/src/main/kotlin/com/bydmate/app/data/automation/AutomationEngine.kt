@@ -123,11 +123,30 @@ class AutomationEngine @Inject constructor(
                 // checks) so a stale edge can't fire later when the AND-condition or
                 // cooldown finally permits. Edge semantics: network-validated is a
                 // moment-in-time signal, not a persistent state.
+                //
+                // First observation of a rule (newly created, freshly enabled, or
+                // first poll after a process restart) SEEDS the watermark with the
+                // monitor's current value without firing. Without this guard the rule
+                // would fire on any stale edge that happened before the rule was
+                // active — including a probe-success captured at app startup before
+                // the user toggled the rule on.
                 val networkEdgeAt = networkAvailableMonitor.lastAvailableAt
-                val previouslySeenNetworkAt = lastSeenNetworkAvailableAt[rule.id] ?: 0L
-                val networkEdge = networkEdgeAt > 0L && networkEdgeAt > previouslySeenNetworkAt
-                if (networkEdge) {
-                    lastSeenNetworkAvailableAt[rule.id] = networkEdgeAt
+                val seenAt = lastSeenNetworkAvailableAt[rule.id]
+                val networkEdge: Boolean = when {
+                    // Async-probe race guard. If we seed 0 here while a probe is
+                    // about to publish a fresh edge, the next poll would treat
+                    // that edge as "new" and fire — exactly the false-fire this
+                    // logic is meant to prevent. Defer one tick.
+                    seenAt == null && networkAvailableMonitor.probePending -> false
+                    seenAt == null -> {
+                        lastSeenNetworkAvailableAt[rule.id] = networkEdgeAt
+                        false
+                    }
+                    else -> {
+                        val isEdge = networkEdgeAt > 0L && networkEdgeAt > seenAt
+                        if (isEdge) lastSeenNetworkAvailableAt[rule.id] = networkEdgeAt
+                        isEdge
+                    }
                 }
 
                 // Cooldown
